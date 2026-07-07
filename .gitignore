@@ -1,0 +1,14 @@
+# Visual Studio Code
+.vscode/
+
+# IntelliJ IDEA / JetBrains (PyCharm, WebStorm, etc.)
+.idea/
+*.iws
+*.iml
+*.ipr
+
+# Visual Studio
+.vs/
+[Db]/
+*.suo
+*.user
