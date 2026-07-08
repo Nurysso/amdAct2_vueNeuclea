@@ -1,0 +1,27 @@
+# NovaMart robots.txt
+# Last updated: 2025-01-01
+
+User-agent: *
+
+# Data-rich paths — safe to index
+Allow: /
+Allow: /products
+Allow: /products/
+Allow: /about
+Allow: /blog
+Allow: /faq
+Allow: /.well-known/agents.json
+
+# Session-specific / PII-containing — disallowed
+Disallow: /cart
+Disallow: /checkout
+Disallow: /account
+Disallow: /admin
+
+# Parameterised noise — combinatorial, no structured data
+Disallow: /search?
+Disallow: /filter?
+Disallow: /products?sort=
+Disallow: /products?q=
+
+Sitemap: https://novamart.example/sitemap.xml

@@ -1,0 +1,145 @@
+{
+  "$schema": "https://agents.json/schema/v1.json",
+  "version": "1.0",
+  "name": "NovaMart",
+  "description": "Structured agent manifest for NovaMart e-commerce. Reading this file lets an agent extract all product data in 2 API calls instead of crawling 20+ HTML pages.",
+  "base_url": "http://localhost:8000",
+  "contact": "webmaster@novamart.example",
+
+  "efficiency_hint": {
+    "naive_crawler_cost": {
+      "pages_to_crawl": 26,
+      "includes": ["home", "18 product detail pages", "about", "blog (3 posts)", "faq", "cart", "checkout", "account", "404"],
+      "html_bytes_approximate": "~1.4 MB",
+      "useful_data_bytes_approximate": "~42 KB",
+      "signal_to_noise_ratio": "3%"
+    },
+    "agent_guided_cost": {
+      "api_calls": 2,
+      "call_1": "GET /api/products?limit=100 → all 18 products in one JSON payload",
+      "call_2": "GET /api/categories → category taxonomy",
+      "json_bytes_approximate": "~22 KB",
+      "signal_to_noise_ratio": "100%",
+      "compute_saving": "~92% fewer bytes processed, zero HTML parsing required"
+    }
+  },
+
+  "data_sources": [
+    {
+      "id": "product_listing",
+      "purpose": "Retrieve all products. Supports category filtering and pagination.",
+      "method": "GET",
+      "endpoint": "/api/products",
+      "parameters": {
+        "category": {
+          "type": "string",
+          "optional": true,
+          "description": "Filter by category. Known values: Electronics, Clothing, Home & Garden, Books"
+        },
+        "page": {
+          "type": "integer",
+          "default": 1,
+          "description": "Page number (1-indexed)"
+        },
+        "limit": {
+          "type": "integer",
+          "default": 20,
+          "max": 100,
+          "description": "Products per page. Use limit=100 to retrieve all products in a single call."
+        }
+      },
+      "response_envelope": {
+        "data": "array of Product objects",
+        "total": "total product count",
+        "page": "current page",
+        "limit": "items per page",
+        "total_pages": "total page count"
+      },
+      "pagination_strategy": "offset",
+      "recommended_call": "GET /api/products?limit=100",
+      "notes": "A single call with limit=100 retrieves all 18 products. No pagination loop needed for this dataset size."
+    },
+    {
+      "id": "product_detail",
+      "purpose": "Retrieve full details for a single product by numeric ID.",
+      "method": "GET",
+      "endpoint": "/api/products/{id}",
+      "parameters": {
+        "id": {
+          "type": "integer",
+          "required": true,
+          "description": "Numeric product ID. IDs are returned in the product_listing response."
+        }
+      },
+      "notes": "Only necessary if you need data beyond what product_listing returns. The listing already includes all schema fields."
+    },
+    {
+      "id": "categories",
+      "purpose": "Retrieve the list of all product categories.",
+      "method": "GET",
+      "endpoint": "/api/categories",
+      "notes": "Returns a flat array of category name strings."
+    }
+  ],
+
+  "schema": {
+    "Product": {
+      "description": "A single sellable product.",
+      "fields": {
+        "id":          { "type": "integer", "description": "Unique numeric product identifier" },
+        "slug":        { "type": "string",  "description": "URL-safe identifier, used in frontend routes /products/{slug}" },
+        "name":        { "type": "string",  "description": "Full display name of the product" },
+        "price":       { "type": "float",   "description": "Price in USD" },
+        "category":    { "type": "string",  "description": "Top-level category: Electronics | Clothing | Home & Garden | Books" },
+        "image_url":   { "type": "string",  "description": "Absolute URL to product image (600×400)" },
+        "description": { "type": "string",  "description": "2–4 sentence product description" },
+        "rating":      { "type": "float",   "description": "Average customer rating (0.0–5.0)" },
+        "stock":       { "type": "integer", "description": "Units currently in stock" },
+        "tags":        { "type": "array",   "items": "string", "description": "Keyword tags for the product" }
+      }
+    }
+  },
+
+  "extraction_targets": {
+    "recommended": ["id", "slug", "name", "price", "category", "image_url", "description", "rating", "tags"],
+    "optional":    ["stock"],
+    "skip":        []
+  },
+
+  "excludes": {
+    "routes": [
+      { "path": "/cart",     "reason": "Session-specific, no product data, disallowed in robots.txt" },
+      { "path": "/checkout", "reason": "Multi-step form, PII, disallowed in robots.txt" },
+      { "path": "/account",  "reason": "Authentication wall, PII, disallowed in robots.txt" },
+      { "path": "/admin",    "reason": "Internal tooling, disallowed in robots.txt" },
+      { "path": "/about",    "reason": "Static marketing copy — no structured product data" },
+      { "path": "/blog",     "reason": "Editorial content — no structured product data" },
+      { "path": "/faq",      "reason": "Q&A copy — no structured product data" }
+    ],
+    "html_regions": [
+      "nav",
+      "footer",
+      ".navbar",
+      ".footer",
+      ".hero-marketing",
+      ".blog-post",
+      ".faq-section",
+      ".cart-drawer"
+    ],
+    "query_params_to_avoid": [
+      "/search?q=",
+      "/products?sort=",
+      "/filter?"
+    ]
+  },
+
+  "rate_limit_hint": {
+    "requests_per_minute": 60,
+    "note": "This is a demo API with no rate limiting, but agents should still be polite."
+  },
+
+  "auth": {
+    "required": false,
+    "note": "All product endpoints are public. No API key needed."
+  }
+}
