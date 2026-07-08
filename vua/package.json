@@ -1,0 +1,19 @@
+{
+  "name": "vua-mcpGen",
+  "private": true,
+  "scripts": {
+    "build": "tsc -b packages/core packages/parser packages/templates packages/generator packages/cli",
+    "build:all": "pnpm -r build",
+    "build:core": "pnpm --filter @proj/core build",
+    "build:parser": "pnpm --filter @proj/parser build",
+    "build:templates": "pnpm --filter @proj/templates build",
+    "build:generator": "pnpm --filter @proj/generator build",
+    "build:cli": "pnpm --filter @proj/cli build",
+    "typecheck": "pnpm -r typecheck",
+    "lint": "pnpm -r lint"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.43",
+    "typescript": "^5.4.0"
+  }
+}

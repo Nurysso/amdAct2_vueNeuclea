@@ -12,3 +12,7 @@
 [Db]/
 *.suo
 *.user
+__pycache__/
+*node_modules*
+*dist*
+*tsconfig.tsbuildinfo*
