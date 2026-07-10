@@ -417,47 +417,25 @@ export default function App() {
     <div style={s.page}>
       <div style={s.topNav}>
         <div style={s.navLeft}>
-          <div style={s.logoMark}>AC</div>
-          <div style={s.productTitle}>Agent Console</div>
+          <div style={s.productTitle}>Neuclea</div>
         </div>
         <div style={s.navRight}>
-          <div style={s.connInfo}>
-            <div style={{...s.connDotSmall, background: connected? T.success: T.muted}} />
-            <div style={s.connText}>{connected? 'Backend connected':'Disconnected'}</div>
-            <div style={s.version}>v0.1</div>
+          <div style={s.headerAgentWrap}>
+            <div style={s.headerAgentLabel}>ACTIVE AGENT</div>
+            {!agentCfg ? (
+              <div style={s.connText}>No agent connected</div>
+            ) : (
+              <div style={s.connInfo}>
+                <div style={s.connText}>{agentCfg.name}</div>
+                <div style={{...s.connDotSmall, background: connected ? T.success : T.muted}} />
+                <div style={s.version}>{connected ? 'Connected' : 'Not connected'}</div>
+              </div>
+            )}
           </div>
         </div>
       </div>
 
       <div style={s.workspace}>
-        <aside style={s.sidebar}>
-          <div style={s.sideSection}>
-            <div style={s.sideLabel}>ACTIVE AGENT</div>
-            {!agentCfg ? (
-              <div style={s.sideEmpty}>No agent connected</div>
-            ) : (
-              <div>
-                <div style={s.agentName}>{agentCfg.name}</div>
-                <div style={s.agentMetaRow}><div style={{color: connected?T.success:T.muted}}>{connected? 'Connected':'Not connected'}</div><div style={s.agentDomain}>{agentCfg.origin||''}</div></div>
-                <div style={s.toolCount}>{(agentCfg.tools||[]).length} tools</div>
-              </div>
-            )}
-          </div>
-
-          <div style={s.sideSection}>
-            <div style={s.sideLabel}>AVAILABLE TOOLS</div>
-            {agentCfg && agentCfg.tools && agentCfg.tools.length>0 ? (
-              <div style={s.toolsList}>
-                {agentCfg.tools.map((t,i)=> (
-                  <div key={i} style={s.toolItem}><div style={s.toolIcon} /> <div style={s.toolName}>{t.name}</div> <div style={s.toolAvail}>{t.available? 'OK':'—'}</div></div>
-                ))}
-              </div>
-            ) : (
-              <div style={s.sideEmptySmall}>No tools discovered</div>
-            )}
-          </div>
-        </aside>
-
         <main style={s.main}>
           <div style={s.connectBar}>
             {!connected ? (
@@ -546,6 +524,8 @@ const s = {
   logoMark: {width:36,height:36,borderRadius:6,background:T.accent,color:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontWeight:700,boxShadow:'0 1px 0 rgba(0,0,0,0.06)'},
   productTitle: {fontWeight:700,fontSize:15,color:T.head},
   navRight: {display:'flex',alignItems:'center',gap:8},
+  headerAgentWrap: {display:'flex',flexDirection:'column',alignItems:'flex-end',gap:2},
+  headerAgentLabel: {fontSize:10,fontWeight:700,color:T.muted,letterSpacing:1},
   connInfo: {display:'flex',alignItems:'center',gap:10,color:T.txtSoft,fontSize:13},
   connDotSmall:{width:9,height:9,borderRadius:3},
   connText:{fontSize:13,color:T.head},
