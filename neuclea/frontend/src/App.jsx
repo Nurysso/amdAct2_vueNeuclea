@@ -547,7 +547,7 @@ const s = {
   toolName:{flex:1,fontSize:13,color:T.head,fontWeight:600},
   toolAvail:{fontSize:12,color:T.muted},
 
-  main: {flex:1,display:'flex',flexDirection:'column'},
+  main: {flex:1,display:'flex',flexDirection:'column',paddingBottom:'20px',boxSizing:'border-box'},
   connectBar:{padding:14,borderBottom:`1px solid ${T.border}`,background:T.bg},
   connectInner:{display:'flex',gap:10,alignItems:'center'},
   connectLabel:{fontSize:11,fontWeight:700,color:T.muted,letterSpacing:1},
