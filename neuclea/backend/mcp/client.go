@@ -110,13 +110,24 @@ type JSONRPCError struct {
 func (c *Client) CallTool(ctx context.Context, tool string, params map[string]interface{}) (interface{}, error) {
 	c.Touch()
 
-	fmt.Printf("🔧 MCP CallTool - Tool: %s, Params: %+v\n", tool, params)
-	fmt.Printf("🔧 MCP CallTool - Params type: %T\n", params)
-	fmt.Printf("🔧 MCP CallTool - Params is nil: %v\n", params == nil)
-
 	if params == nil {
 		params = make(map[string]interface{})
 	}
+
+	for k, v := range params {
+		switch s := v.(type) {
+		case string:
+			lower := strings.ToLower(strings.TrimSpace(s))
+			if lower == "true" {
+				params[k] = true
+			} else if lower == "false" {
+				params[k] = false
+			} else {
+				params[k] = sanitizeStringParam(s)
+			}
+		}
+	}
+	fmt.Printf("🔧 MCP CallTool - Tool: %s, Params: %+v\n", tool, params)
 
 	rpcID := float64(time.Now().UnixNano()) / 1e9
 
@@ -172,7 +183,40 @@ func (c *Client) CallTool(ctx context.Context, tool string, params map[string]in
 		return nil, fmt.Errorf("mcp error [%d]: %s", rpcResp.Error.Code, rpcResp.Error.Message)
 	}
 
-	return rpcResp.Result, nil
+	// Parse the result to extract the actual data
+	return extractResult(rpcResp.Result), nil
+}
+
+// extractResult extracts the actual data from the MCP result structure
+func extractResult(result interface{}) interface{} {
+	// Try to parse as map
+	if resultMap, ok := result.(map[string]interface{}); ok {
+		// Check if it has a "content" field
+		if content, ok := resultMap["content"]; ok {
+			if contentSlice, ok := content.([]interface{}); ok && len(contentSlice) > 0 {
+				// Look for the first text content
+				for _, item := range contentSlice {
+					if itemMap, ok := item.(map[string]interface{}); ok {
+						if itemType, ok := itemMap["type"]; ok && itemType == "text" {
+							if text, ok := itemMap["text"]; ok {
+								if textStr, ok := text.(string); ok {
+									// Try to parse the text as JSON
+									var parsedJSON map[string]interface{}
+									if err := json.Unmarshal([]byte(textStr), &parsedJSON); err == nil {
+										return parsedJSON
+									}
+									return textStr
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+		// If no content field, return the result as-is
+		return resultMap
+	}
+	return result
 }
 
 func (c *Client) Close() {

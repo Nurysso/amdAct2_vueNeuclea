@@ -52,11 +52,11 @@ func NewClient() (*Client, error) {
 	}
 	c := &Client{
 		Provider:     Provider(provider),
-		OllamaURL:    "http:",
+		OllamaURL:    "http://localhost:11434",
 		OllamaModel:  getenvDefault("OLLAMA_MODEL", "llama3"),
 		FireworksURL: "https://api.fireworks.ai/inference/v1",
 		FireworksKey: os.Getenv("FIREWORKS_API_KEY"),
-		FireworksMdl: getenvDefault("FIREWORKS_MODEL", "accounts/fireworks/models/llama-v3-70b-instruct"),
+		FireworksMdl: getenvDefault("FIREWORKS_MODEL", "accounts/fireworks/models/glm-5p2"),
 		HTTP:         &http.Client{Timeout: 60 * time.Second},
 	}
 	if c.Provider == ProviderFireworks && c.FireworksKey == "" {
@@ -732,7 +732,7 @@ func (c *Client) doRequest(ctx context.Context, req chatRequest) ([]byte, int, e
 	if err != nil {
 		return nil, 0, err
 	}
-	url := c.FireworksURL
+	url := c.FireworksURL + "/chat/completions"
 	if c.Provider == ProviderOllama {
 		url = c.OllamaURL + "/v1/chat/completions"
 	}
@@ -741,6 +741,7 @@ func (c *Client) doRequest(ctx context.Context, req chatRequest) ([]byte, int, e
 		return nil, 0, err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Accept", "application/json")
 	if c.Provider == ProviderFireworks {
 		httpReq.Header.Set("Authorization", "Bearer "+c.FireworksKey)
 	}
@@ -761,7 +762,7 @@ func (c *Client) doStream(ctx context.Context, req chatRequest, cb func(string))
 	if err != nil {
 		return "", err
 	}
-	url := c.FireworksURL
+	url := c.FireworksURL + "/chat/completions"
 	if c.Provider == ProviderOllama {
 		url = c.OllamaURL + "/v1/chat/completions"
 	}

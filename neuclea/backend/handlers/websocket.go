@@ -194,7 +194,7 @@ func (h *Handler) handleInit(s *session, msg WSMessage, raw []byte) {
 		h.send(s, ServerResponse{Type: "init", ID: msg.ID, OK: false, Error: "decode config: " + err.Error()})
 		return
 	}
-	endpoint := strings.TrimRight(cfg.MCPServerURL, "/")
+	endpoint := strings.TrimRight(cfg.MCPServerURL, "/mcp")
 	if endpoint == "" {
 		h.send(s, ServerResponse{Type: "init", ID: msg.ID, OK: false, Error: "mcp_server_url is required"})
 		return
@@ -375,6 +375,21 @@ func (h *Handler) handleQuery(s *session, msg WSMessage) {
 			resultMsg.WriteString("Here's what I found:\n\n")
 			for _, exec := range agentResponse.ToolCalls {
 				if exec.Success && exec.Result != nil {
+					if resultMap, ok := exec.Result.(map[string]interface{}); ok {
+						if data, ok := resultMap["data"]; ok {
+							if dataSlice, ok := data.([]interface{}); ok {
+								for _, item := range dataSlice {
+									if product, ok := item.(map[string]interface{}); ok {
+										name, _ := product["name"].(string)
+										price, _ := product["price"].(float64)
+										resultMsg.WriteString(fmt.Sprintf("• %s: $%.2f\n", name, price))
+									}
+								}
+								continue
+							}
+						}
+					}
+					// Fallback to raw result
 					resultMsg.WriteString(fmt.Sprintf("• %s result: %v\n", exec.Tool, exec.Result))
 				}
 			}

@@ -92,9 +92,39 @@ func (a *Agent) Execute(ctx context.Context, query string, tools []llm.Tool, end
 		if plan.Action == "final_answer" {
 			state.Completed = true
 			state.FinalResponse = plan.Thought
+
+			// Build a message with the tool results
+			var messageBuilder strings.Builder
+			if len(state.ToolHistory) > 0 {
+				messageBuilder.WriteString("Here are the results:\n\n")
+				for _, exec := range state.ToolHistory {
+					if exec.Success && exec.Result != nil {
+						// Try to format product data
+						if resultMap, ok := exec.Result.(map[string]interface{}); ok {
+							if data, ok := resultMap["data"]; ok {
+								if dataSlice, ok := data.([]interface{}); ok {
+									for _, item := range dataSlice {
+										if product, ok := item.(map[string]interface{}); ok {
+											name, _ := product["name"].(string)
+											price, _ := product["price"].(float64)
+											messageBuilder.WriteString(fmt.Sprintf("• %s: $%.2f\n", name, price))
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+
+			finalMessage := messageBuilder.String()
+			if finalMessage == "" {
+				finalMessage = plan.Thought
+			}
+
 			return &AgentResponse{
 				Final:      true,
-				Message:    plan.Thought,
+				Message:    finalMessage,
 				ToolCalls:  state.ToolHistory,
 				Thought:    plan.Thought,
 				Confidence: 0.95,
