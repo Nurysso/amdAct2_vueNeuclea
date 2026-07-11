@@ -41,7 +41,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", h.HandleWS)
 	mux.HandleFunc("/telemetry", telemetryHandler(h))
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"ok":        true,
@@ -52,7 +52,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:              ":8080",
-		Handler:           withRequestLog(mux),
+		Handler:           withCORS(withRequestLog(mux)),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
@@ -77,6 +77,28 @@ func main() {
 		log.Fatalf("[%s] server error: %v", time.Now().Format(time.RFC3339), err)
 	}
 	<-idleConnsClosed
+}
+
+// withCORS adds CORS headers for the frontend and handles preflight requests.
+func withCORS(next http.Handler) http.Handler {
+	allowed := map[string]bool{
+		"https://neuclea-console.vercel.app": true,
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		origin := r.Header.Get("Origin")
+		if allowed[origin] {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+			w.Header().Set("Access-Control-Allow-Credentials", "true")
+			w.Header().Set("Vary", "Origin")
+		}
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // telemetryHandler returns the public JSON view of all active sessions and
