@@ -37,7 +37,8 @@ export function useProducts({
     params.set('page', String(page));
     params.set('limit', String(limit));
 
-    fetch(`${baseUrl}/api/products?${params}`)
+    const url = `${baseUrl}/api/products?${params}`;
+    fetch(url)
       .then((res) => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return res.json() as Promise<ProductListResponse>;
@@ -60,7 +61,7 @@ export function useProducts({
     return () => {
       cancelled = true;
     };
-  }, [category, page, limit]);
+  }, [category, page, limit, baseUrl]);
 
   return { products, total, totalPages, loading, error };
 }
