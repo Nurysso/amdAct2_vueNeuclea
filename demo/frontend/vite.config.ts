@@ -8,11 +8,11 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': {
-        target: 'https://dummy-backend-amdact2-vueneuclea.onrender.com/',
+        target: 'https://dummy-backend-amdact2-vueneuclea.onrender.com',
         changeOrigin: true,
       },
       '/.well-known': {
-        target: 'https://dummy-backend-amdact2-vueneuclea.onrender.com/',
+        target: 'https://dummy-backend-amdact2-vueneuclea.onrender.com',
         changeOrigin: true,
       },
     },
