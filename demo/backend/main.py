@@ -18,10 +18,10 @@ app = FastAPI(
 )
 
 # ── CORS ───────────────────────────────────────────────────────────────────────
-ALLOWED_ORIGINS = os.getenv(
+ALLOWED_ORIGINS = [o.strip() for o in os.getenv(
     "CORS_ORIGINS",
-    "http://localhost:5173,http://localhost:4173,http://localhost:3000, https://amd-act2-vue-neuclea.vercel.app",
-).split(",")
+    "http://localhost:5173,http://localhost:4173,http://localhost:3000,https://amd-act2-vue-neuclea.vercel.app",
+).split(",")]
 
 app.add_middleware(
     CORSMiddleware,
