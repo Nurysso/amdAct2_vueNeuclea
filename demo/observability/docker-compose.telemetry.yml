@@ -1,0 +1,106 @@
+
+services:
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: novamart-api-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.enable-lifecycle'
+    restart: unless-stopped
+    networks:
+      - observability
+
+  loki:
+    image: grafana/loki:latest
+    container_name: novamart-api-loki
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./loki-config.yml:/etc/loki/loki-config.yml
+      - loki_data:/loki
+    command: -config.file=/etc/loki/loki-config.yml
+    restart: unless-stopped
+    networks:
+      - observability
+
+  promtail:
+    image: grafana/promtail:latest
+    container_name: novamart-api-promtail
+    volumes:
+      - ./promtail-config.yml:/etc/promtail/promtail-config.yml
+      - /var/log:/var/log:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: -config.file=/etc/promtail/promtail-config.yml
+    restart: unless-stopped
+    depends_on:
+      - loki
+    networks:
+      - observability
+
+  tempo:
+    image: grafana/tempo:latest
+    container_name: novamart-api-tempo
+    ports:
+      - '3200:3200'
+      - "4318:4318"
+      - "4317:4317"
+    command: -config.file=/etc/tempo/tempo-config.yml
+    restart: unless-stopped
+    networks:
+      - observability
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: novamart-api-grafana
+    ports:
+      - "3001:3000"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning
+      - ./grafana/dashboards:/var/lib/grafana/dashboards
+      - grafana_data:/var/lib/grafana
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_INSTALL_PLUGINS=grafana-piechart-panel,grafana-worldmap-panel
+      - GF_SERVER_ROOT_URL=http://localhost:3001
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+      - loki
+      - tempo
+    networks:
+      - observability
+
+  node-exporter:
+    image: prom/node-exporter:latest
+    container_name: novamart-api-node-exporter
+    ports:
+      - "9100:9100"
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.rootfs=/rootfs'
+      - '--path.sysfs=/host/sys'
+    restart: unless-stopped
+    networks:
+      - observability
+
+networks:
+  observability:
+    driver: bridge
+
+volumes:
+  prometheus_data:
+  loki_data:
+  tempo_data:
+  grafana_data:
