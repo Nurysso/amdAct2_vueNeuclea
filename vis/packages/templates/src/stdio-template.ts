@@ -15,6 +15,13 @@ import {
   renderTsConfig,
   renderTypes,
 } from './renderers/static-files.js';
+import {
+  renderTelemetryIndex,
+  renderTelemetryLogs,
+  renderTelemetryMetrics,
+  renderTelemetryTraces,
+  renderTelemetryTypes,
+} from './renderers/telemetry-files.js';
 import { renderToolFile } from './renderers/tool-file.js';
 
 export class StdioTemplateEngine implements TemplateEngine {
@@ -22,8 +29,9 @@ export class StdioTemplateEngine implements TemplateEngine {
     const packageName = options?.packageName ?? slugify(spec.title);
     const packageVersion = options?.packageVersion ?? '0.1.0';
 
-    const files: FileTree = []; // ← Now this matches FileTree type
+    const files: FileTree = [];
 
+    // Package files
     files.push({
       relativePath: 'package.json',
       content: renderPackageJson(spec, packageName, packageVersion),
@@ -39,6 +47,7 @@ export class StdioTemplateEngine implements TemplateEngine {
       content: renderReadme(spec, spec.operations.length),
     });
 
+    // Source files
     files.push({
       relativePath: 'src/types.ts',
       content: renderTypes(),
@@ -54,6 +63,33 @@ export class StdioTemplateEngine implements TemplateEngine {
       content: renderHttpClient(),
     });
 
+    // Telemetry files
+    files.push({
+      relativePath: 'src/telemetry/index.ts',
+      content: renderTelemetryIndex(),
+    });
+
+    files.push({
+      relativePath: 'src/telemetry/telemetry-types.ts',
+      content: renderTelemetryTypes(),
+    });
+
+    files.push({
+      relativePath: 'src/telemetry/telemetry-metrics.ts',
+      content: renderTelemetryMetrics(),
+    });
+
+    files.push({
+      relativePath: 'src/telemetry/telemetry-logs.ts',
+      content: renderTelemetryLogs(),
+    });
+
+    files.push({
+      relativePath: 'src/telemetry/telemetry-traces.ts',
+      content: renderTelemetryTraces(),
+    });
+
+    // Tool files
     for (const op of spec.operations) {
       files.push({
         relativePath: `src/tools/${op.operationId}.ts`,
@@ -61,6 +97,7 @@ export class StdioTemplateEngine implements TemplateEngine {
       });
     }
 
+    // Server index
     files.push({
       relativePath: 'src/index.ts',
       content: renderServerIndex(spec),

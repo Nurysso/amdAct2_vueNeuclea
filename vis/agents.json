@@ -1,0 +1,89 @@
+{
+  "schema_version": "1.1",
+  "name": "Novamart API",
+  "description": "",
+  "mcp_server_url": "http://localhost:3000",
+  "environment": "development",
+  "auth": {
+    "type": "none"
+  },
+  "capabilities": {
+    "streaming": false,
+    "batch_calls": true,
+    "max_concurrent_tools": 3
+  },
+  "rate_limits": {
+    "requests_per_minute": 60,
+    "requests_per_day": 10000
+  },
+  "tool_groups": [
+    {
+      "name": "products",
+      "description": "products operations",
+      "tools": [
+        "list_products_api_products_get",
+        "get_product_api_products__product_id__get"
+      ]
+    },
+    {
+      "name": "meta",
+      "description": "meta operations",
+      "tools": [
+        "list_categories_api_categories_get"
+      ]
+    }
+  ],
+  "tools": [
+    {
+      "name": "list_products_api_products_get",
+      "description": "List Products",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "category": {
+            "type": "string",
+            "description": "Filter by category name"
+          },
+          "page": {
+            "type": "integer",
+            "description": "Page number (1-indexed)"
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Items per page"
+          }
+        }
+      },
+      "auth_required": false,
+      "read_only": true
+    },
+    {
+      "name": "get_product_api_products__product_id__get",
+      "description": "Get Product",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "product_id"
+        ],
+        "properties": {
+          "product_id": {
+            "type": "integer",
+            "description": ""
+          }
+        }
+      },
+      "auth_required": false,
+      "read_only": true
+    },
+    {
+      "name": "list_categories_api_categories_get",
+      "description": "List Categories",
+      "input_schema": {
+        "type": "object",
+        "properties": {}
+      },
+      "auth_required": false,
+      "read_only": true
+    }
+  ]
+}

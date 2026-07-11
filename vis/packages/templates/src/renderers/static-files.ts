@@ -1,4 +1,5 @@
 import type { ServiceSpec } from '@vis/core';
+import { telemetryDependencies, telemetryDevDependencies } from './telemetry-files';
 
 export function renderPackageJson(
   spec: ServiceSpec,
@@ -19,12 +20,18 @@ export function renderPackageJson(
       },
       dependencies: {
         '@modelcontextprotocol/sdk': '^1.0.0',
-        zod: '^3.22.0',
+        cors: '^2.8.5',
+        dotenv: '^16.4.5',
         'node-fetch': '^3.3.2',
+        zod: '^3.22.0',
+        'zod-to-json-schema': '^3.22.0',
+        ...telemetryDependencies(),
       },
       devDependencies: {
-        typescript: '^5.4.0',
+        '@types/cors': '^2.8.17',
         '@types/node': '^20.0.0',
+        typescript: '^5.4.0',
+        ...telemetryDevDependencies(),
       },
       engines: {
         node: '>=18.0.0',
@@ -132,17 +139,30 @@ export function renderConfig(spec: ServiceSpec): string {
 /**
  * Runtime configuration for the generated MCP server.
  *
- * Override BASE_URL via environment variable to point at a different host.
+ *   MCP_BASE_URL      Override the upstream API base URL.
  *
- * Auth extension point:
- *   When auth is implemented, add API_KEY / BEARER_TOKEN / OAUTH_TOKEN
- *   environment variables here and inject them in each tool's header builder.
- *   The ServiceSpec.securitySchemes field carries the upstream auth metadata.
+ *   MCP_TRANSPORT     "stdio" (default, for Claude Desktop) | "sse" | "http"
+ *   PORT              HTTP server port when using sse/http transport. Default 3000.
  *
- * Transport extension point:
- *   This server uses stdio. To switch to SSE or HTTP transport, replace
- *   StdioServerTransport in src/index.ts with the appropriate SDK transport.
- *   The IR TransportKind field is already plumbed for this.
+ *   TELEMETRY_ENABLED   "true" to enable all telemetry. Default false.
+ *   NODE_ENV            "development" | "staging" | "production". Default "development".
+ *
+ *   METRICS_ENABLED   "false" to disable. Default true (when TELEMETRY_ENABLED).
+ *   METRICS_PORT      Prometheus scrape port. Default 9090.
+ *   METRICS_PREFIX    Metric name prefix. Default "mcp".
+ *
+ *   LOGS_ENABLED      "false" to disable. Default true (when TELEMETRY_ENABLED).
+ *   LOG_LEVEL         "debug" | "info" | "warn" | "error". Default "info".
+ *   LOKI_URL          Loki push URL, e.g. "http://loki:3100". Omit → console only.
+ *   LOKI_BATCH_MS     Log batch flush interval in ms. Default 5000.
+ *
+ *   TRACES_ENABLED      "true" to enable. Default false.
+ *   OTLP_ENDPOINT       Tempo OTLP/HTTP base URL, e.g. "http://tempo:4318". Default that.
+ *   TRACE_SAMPLE_RATE   0.0–1.0. Default 0.1 (10 %).
+ *
+ *   When auth is implemented, add MCP_API_KEY / MCP_BEARER_TOKEN env vars here
+ *   and inject them in src/http-client.ts. ServiceSpec.securitySchemes carries
+ *   the upstream auth metadata.
  */
 export const BASE_URL: string =
   process.env["MCP_BASE_URL"] ?? ${JSON.stringify(spec.baseUrl)};
@@ -176,6 +196,24 @@ The server communicates over **stdio** (MCP standard transport).
 | Variable | Default | Purpose |
 |---|---|---|
 | \`MCP_BASE_URL\` | \`${spec.baseUrl}\` | Upstream API base URL |
+| \`MCP_TRANSPORT\` | \`stdio\` | Transport: \`stdio\` · \`sse\` · \`http\` |
+| \`PORT\` | \`3000\` | HTTP port (sse/http transport only) |
+| **Telemetry** | | |
+| \`TELEMETRY_ENABLED\` | \`false\` | Master switch for all telemetry |
+| \`NODE_ENV\` | \`development\` | \`development\` · \`staging\` · \`production\` |
+| **Prometheus** | | |
+| \`METRICS_ENABLED\` | \`true\` | Expose \`/metrics\` on a dedicated port |
+| \`METRICS_PORT\` | \`9090\` | Prometheus scrape port |
+| \`METRICS_PREFIX\` | \`mcp\` | Prefix for all metric names |
+| **Loki** | | |
+| \`LOGS_ENABLED\` | \`true\` | Enable structured logging |
+| \`LOG_LEVEL\` | \`info\` | \`debug\` · \`info\` · \`warn\` · \`error\` |
+| \`LOKI_URL\` | _(console only)_ | Loki push URL e.g. \`http://loki:3100\` |
+| \`LOKI_BATCH_MS\` | \`5000\` | Log batch flush interval (ms) |
+| **Tempo** | | |
+| \`TRACES_ENABLED\` | \`false\` | Enable distributed tracing |
+| \`OTLP_ENDPOINT\` | \`http://tempo:4318\` | Tempo OTLP/HTTP base URL |
+| \`TRACE_SAMPLE_RATE\` | \`0.1\` | Sampling rate 0.0–1.0 |
 
 ## Tools (${operations} total)
 

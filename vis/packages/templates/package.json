@@ -15,13 +15,15 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.0.0",
-    "@vis/core": "workspace:*",
-    "zod": "^3.22.0",
-    "zod-to-json-schema": "^3.25.2"
+    "@vis/core": "workspace:*"
+  },
+  "peerDependenciesMeta": {
+    "@vis/telemetry": {
+      "optional": true
+    }
   },
   "devDependencies": {
-    "@types/node": "^20.0.0",
-    "typescript": "^5.4.0"
+    "typescript": "^5.4.0",
+    "@types/node": "^20.0.0"
   }
 }

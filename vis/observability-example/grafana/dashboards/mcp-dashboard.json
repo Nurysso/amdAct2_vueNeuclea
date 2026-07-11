@@ -1,0 +1,147 @@
+{
+  "title": "novamart-api MCP Server",
+  "uid": "novamart-api-dashboard",
+  "tags": [
+    "mcp",
+    "novamart-api"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 16,
+  "version": 1,
+  "refresh": "30s",
+  "panels": [
+    {
+      "title": "Tool Calls per Second",
+      "type": "graph",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
+      "targets": [
+        {
+          "expr": "rate(mcp_tool_calls_total[5m])",
+          "legendFormat": "{{tool}} - {{success}}"
+        }
+      ]
+    },
+    {
+      "title": "Tool Duration (P95)",
+      "type": "graph",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(mcp_tool_duration_seconds_bucket[5m])) by (le, tool))",
+          "legendFormat": "{{tool}}"
+        }
+      ]
+    },
+    {
+      "title": "Error Rate",
+      "type": "stat",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 8
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(mcp_tool_errors_total[5m])) / sum(rate(mcp_tool_calls_total[5m])) * 100"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 5
+              },
+              {
+                "color": "red",
+                "value": 20
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "title": "Active Tools",
+      "type": "graph",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 8
+      },
+      "targets": [
+        {
+          "expr": "mcp_active_tools",
+          "legendFormat": "{{tool}}"
+        }
+      ]
+    },
+    {
+      "title": "Tool Usage Distribution",
+      "type": "piechart",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      },
+      "targets": [
+        {
+          "expr": "sum by (tool) (mcp_tool_calls_total)",
+          "legendFormat": "{{tool}}"
+        }
+      ]
+    },
+    {
+      "title": "Request Size Distribution",
+      "type": "graph",
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 0,
+        "y": 12
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(mcp_request_size_bytes_bucket[5m])) by (le))",
+          "legendFormat": "P95 Request Size"
+        }
+      ]
+    },
+    {
+      "title": "Response Size Distribution",
+      "type": "graph",
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 12,
+        "y": 12
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(mcp_response_size_bytes_bucket[5m])) by (le))",
+          "legendFormat": "P95 Response Size"
+        }
+      ]
+    }
+  ]
+}

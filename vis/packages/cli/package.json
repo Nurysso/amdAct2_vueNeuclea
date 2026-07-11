@@ -1,0 +1,20 @@
+{
+  "name": "@vis/cli",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "vis": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsup && chmod +x dist/cli.js"
+  },
+  "dependencies": {
+    "@vis/core": "workspace:*",
+    "@vis/generator": "workspace:*",
+    "@vis/parser": "workspace:*",
+    "@vis/templates": "workspace:*"
+  },
+  "devDependencies": {
+    "tsup": "^8.0.0"
+  }
+}

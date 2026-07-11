@@ -1,0 +1,17 @@
+{
+  "name": "vis-monorepo",
+  "private": true,
+  "scripts": {
+    "build": "pnpm -r build",
+    "build:all": "pnpm -r build",
+    "build:templates": "pnpm --filter @vis/templates build",
+    "build:generator": "pnpm --filter @vis/generator build",
+    "build:cli": "pnpm --filter @vis/cli build",
+    "clean": "pnpm -r exec -- rm -rf dist tsconfig.tsbuildinfo",
+    "dev": "pnpm build && pnpm --filter @vis/cli dev"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.4.0"
+  }
+}

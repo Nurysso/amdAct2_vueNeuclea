@@ -78,6 +78,28 @@ npm install -g @vis/cli
 pnpm add -g @vis/cli
 ```
 
+## Quick refrence
+
+```
+# Development (local backend)
+MCP_BASE_URL=http://localhost:8000 MCP_TRANSPORT=http node dist/index.js
+
+# Production (remote backend)
+MCP_BASE_URL=https://api.mycompany.com MCP_TRANSPORT=http node dist/index.js
+
+# Claude Desktop (stdio mode)
+MCP_BASE_URL=http://localhost:8000 node dist/index.js
+
+# Custom MCP server port
+PORT=8080 MCP_BASE_URL=http://localhost:8000 MCP_TRANSPORT=http node dist/index.js
+
+# Different backend port
+MCP_BASE_URL=http://localhost:5000 MCP_TRANSPORT=http node dist/index.js
+
+# Multiple environment variables
+MCP_BASE_URL=http://localhost:8000 MCP_TRANSPORT=http PORT=3000 NODE_ENV=production node dist/index.js
+```
+
 ### Local Development
 
 ```bash
