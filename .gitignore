@@ -5,6 +5,7 @@
 .idea/
 *.iws
 *.iml
+archieve/
 *.ipr
 
 # Visual Studio

@@ -63,7 +63,9 @@ type session struct {
 	telemetry   Telemetry
 	lastTool    string
 	initialized bool
+	categories  []string
 	endpoint    string
+	sleeping    bool
 }
 
 type Handler struct {
@@ -151,9 +153,9 @@ func (h *Handler) readLoop(s *session) {
 	defer h.shutdownSession(s, "read loop exited")
 	conn := s.conn
 	conn.SetReadLimit(1 << 20)
-	_ = conn.SetReadDeadline(time.Now().Add(h.IdleTimeout))
+	_ = conn.SetReadDeadline(time.Now().Add(30 * time.Minute))
 	conn.SetPongHandler(func(string) error {
-		_ = conn.SetReadDeadline(time.Now().Add(h.IdleTimeout))
+		_ = conn.SetReadDeadline(time.Now().Add(30 * time.Minute))
 		return nil
 	})
 	for {
@@ -166,8 +168,19 @@ func (h *Handler) readLoop(s *session) {
 		}
 		_ = conn.SetReadDeadline(time.Now().Add(h.IdleTimeout))
 		s.mu.Lock()
+		wasSlepping := s.sleeping
+		s.sleeping = false
 		s.lastActive = time.Now()
 		s.mu.Unlock()
+		if wasSlepping {
+			h.send(s, ServerResponse{
+				Type: "session.resumed",
+				OK:   true,
+				Payload: map[string]interface{}{
+					"message": "Session resumed.",
+				},
+			})
+		}
 		var msg WSMessage
 		if err := json.Unmarshal(raw, &msg); err != nil {
 			h.send(s, ServerResponse{Type: "error", OK: false, Error: "invalid json: " + err.Error()})
@@ -208,6 +221,7 @@ func (h *Handler) handleInit(s *session, msg WSMessage, raw []byte) {
 	s.config = cfg
 	s.tools = tools
 	s.initialized = true
+	go h.fetchCategories(s)
 	s.endpoint = endpoint
 	s.lastActive = time.Now()
 	s.mu.Unlock()
@@ -224,6 +238,59 @@ func (h *Handler) handleInit(s *session, msg WSMessage, raw []byte) {
 	h.send(s, ServerResponse{Type: "init", ID: msg.ID, OK: true, Payload: payload})
 	log.Printf("[%s] session %s initialized (%d tools, endpoint=%s, healthy=%v)",
 		time.Now().Format(time.RFC3339), s.id, len(tools), endpoint, healthErr == nil)
+}
+
+func (h *Handler) fetchCategories(s *session) {
+	s.mu.Lock()
+	_, hasTool := s.tools["list_categories_api_categories_get"]
+	endpoint := s.endpoint
+	s.mu.Unlock()
+	if !hasTool {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	result, err := h.Pool.CallTool(ctx, endpoint, "list_categories_api_categories_get", map[string]interface{}{})
+	if err != nil {
+		log.Printf("[%s] fetchCategories failed: %v", time.Now().Format(time.RFC3339), err)
+		return
+	}
+	// result is typically {"data": ["Electronics", "Clothing", ...]}
+	cats := extractCategoryList(result)
+	if len(cats) == 0 {
+		return
+	}
+	s.mu.Lock()
+	s.categories = cats
+	s.mu.Unlock()
+	log.Printf("[%s] session %s loaded %d categories", time.Now().Format(time.RFC3339), s.id, len(cats))
+}
+
+func extractCategoryList(result interface{}) []string {
+	m, ok := result.(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	raw, ok := m["data"]
+	if !ok {
+		return nil
+	}
+	switch v := raw.(type) {
+	case []interface{}:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			if s, ok := item.(string); ok {
+				out = append(out, s)
+			} else if m, ok := item.(map[string]interface{}); ok {
+				// handle {name: "Electronics"} shape too
+				if name, ok := m["name"].(string); ok {
+					out = append(out, name)
+				}
+			}
+		}
+		return out
+	}
+	return nil
 }
 
 func findSimilarTool(name string, tools map[string]Tool) string {
@@ -448,6 +515,18 @@ func (h *Handler) handleQuery(s *session, msg WSMessage) {
 		time.Now().Format(time.RFC3339), s.id, elapsed, len(agentResponse.ToolCalls))
 }
 
+func (s *session) extractCategory(query string) string {
+	s.mu.Lock()
+	cats := s.categories
+	s.mu.Unlock()
+	lower := strings.ToLower(query)
+	for _, cat := range cats {
+		if strings.Contains(lower, strings.ToLower(cat)) {
+			return cat
+		}
+	}
+	return ""
+}
 func extractCategoryFromQuery(query string) string {
 	lower := strings.ToLower(query)
 	categories := []string{"Electronics", "Clothing", "Books", "Home & Garden"}
@@ -531,13 +610,96 @@ func (h *Handler) handleAutocomplete(s *session, msg WSMessage) {
 			}
 		}
 	}
-	querySuggestions := suggestQueries(input)
+	// querySuggestions := suggestQueries(input)
+	querySuggestions := h.buildQuerySuggestions(s, input, currentTool)
 	h.send(s, ServerResponse{Type: "autocomplete", ID: msg.ID, OK: true, Payload: map[string]interface{}{
 		"predicted_tools":   predicted,
 		"matched_tools":     matched,
 		"query_suggestions": querySuggestions,
 		"current_tool":      currentTool,
 	}})
+}
+
+func (h *Handler) buildQuerySuggestions(s *session, input string, currentTool string) []string {
+	s.mu.Lock()
+	cats := s.categories
+	s.mu.Unlock()
+
+	// Predictor-driven: what tools are likely next?
+	predicted := h.Predictor.Predict(currentTool, 3)
+
+	suggestions := []string{}
+
+	// Turn predicted tool names into natural query suggestions
+	for _, tool := range predicted {
+		switch {
+		case strings.Contains(tool, "product"):
+			if len(cats) > 0 {
+				suggestions = append(suggestions,
+					fmt.Sprintf("Show me %s products", cats[0]))
+			} else {
+				suggestions = append(suggestions, "Show me all products")
+			}
+		case strings.Contains(tool, "categor"):
+			suggestions = append(suggestions, "What categories are available?")
+		case strings.Contains(tool, "order"):
+			suggestions = append(suggestions, "What's the status of my order?")
+		}
+	}
+
+	// Input-driven: filter by what user is typing
+	if input != "" {
+		lower := strings.ToLower(input)
+		// Match against live categories
+		for _, cat := range cats {
+			if strings.Contains(strings.ToLower(cat), lower) {
+				suggestions = append(suggestions,
+					fmt.Sprintf("Show me %s products", cat),
+					fmt.Sprintf("Find cheap %s items", cat),
+				)
+			}
+		}
+		// Fallback keyword matching
+		switch {
+		case strings.Contains(lower, "ord"):
+			suggestions = append(suggestions, "What's the status of my order?", "Place a new order")
+		case strings.Contains(lower, "track"):
+			suggestions = append(suggestions, "Track my latest package", "Where is my delivery?")
+		case strings.Contains(lower, "find"), strings.Contains(lower, "search"):
+			for _, cat := range cats {
+				suggestions = append(suggestions, fmt.Sprintf("Find %s products", cat))
+			}
+		}
+	}
+
+	// Default if nothing matched
+	if len(suggestions) == 0 {
+		if len(cats) > 0 {
+			for _, cat := range cats {
+				suggestions = append(suggestions, fmt.Sprintf("Show me %s products", cat))
+			}
+		} else {
+			suggestions = []string{
+				"What's the status of my order?",
+				"Show me all products",
+				"What categories are available?",
+			}
+		}
+	}
+
+	// Deduplicate and cap
+	seen := map[string]bool{}
+	out := make([]string, 0, 5)
+	for _, s := range suggestions {
+		if !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+		if len(out) >= 5 {
+			break
+		}
+	}
+	return out
 }
 
 func suggestQueries(input string) []string {
@@ -575,20 +737,43 @@ func (h *Handler) send(s *session, msg ServerResponse) {
 func (h *Handler) idleReaper(s *session) {
 	ticker := time.NewTicker(15 * time.Second)
 	defer ticker.Stop()
+
 	for range ticker.C {
 		s.mu.Lock()
 		idle := time.Since(s.lastActive)
 		conn := s.conn
+		alreadySleeping := s.sleeping
 		s.mu.Unlock()
-		if conn != nil {
-			_ = conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
-			if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
-				h.shutdownSession(s, "ping failed: "+err.Error())
-				return
-			}
+
+		if conn == nil {
+			return
 		}
-		if idle > h.IdleTimeout {
-			h.shutdownSession(s, fmt.Sprintf("idle for %s", idle))
+
+		// Send a ping to keep TCP alive regardless
+		_ = conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
+		if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+			h.shutdownSession(s, "ping failed: "+err.Error())
+			return
+		}
+
+		// Idle threshold: put to sleep (not disconnect)
+		if idle > h.IdleTimeout && !alreadySleeping {
+			s.mu.Lock()
+			s.sleeping = true
+			s.mu.Unlock()
+			h.send(s, ServerResponse{
+				Type: "session.sleeping",
+				OK:   true,
+				Payload: map[string]interface{}{
+					"message":    "Session paused due to inactivity. Send any message to resume.",
+					"idle_since": s.lastActive.Format(time.RFC3339),
+				},
+			})
+		}
+
+		// Hard close only after much longer (e.g. 30 min)
+		if idle > 30*time.Minute {
+			h.shutdownSession(s, fmt.Sprintf("hard timeout after %s idle", idle.Round(time.Second)))
 			return
 		}
 	}

@@ -109,6 +109,7 @@ type chatResponse struct {
 	Choices []struct {
 		Message chatMessage `json:"message"`
 	} `json:"choices"`
+	Usage tokenUsage `json:"usage"`
 }
 
 type streamChunk struct {
@@ -117,6 +118,12 @@ type streamChunk struct {
 			Content string `json:"content"`
 		} `json:"delta"`
 	} `json:"choices"`
+}
+
+type tokenUsage struct {
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+	TotalTokens      int `json:"total_tokens"`
 }
 
 func (c *Client) GetAgentPlan(ctx context.Context, prompt string, tools []Tool) (*AgentPlan, error) {

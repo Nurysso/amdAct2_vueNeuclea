@@ -16,6 +16,13 @@ func NewPool() *Pool {
 	return &Pool{clients: map[string]*Client{}}
 }
 
+func (p *Pool) CallTool(ctx context.Context, endpoint string, tool string, params map[string]interface{}) (interface{}, error) {
+	c := p.Get(endpoint)
+	if c == nil {
+		return nil, fmt.Errorf("no mcp client for endpoint %q", endpoint)
+	}
+	return c.CallTool(ctx, tool, params)
+}
 func (p *Pool) Add(endpoint string) *Client {
 	p.mu.Lock()
 	defer p.mu.Unlock()
