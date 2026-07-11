@@ -20,7 +20,7 @@ app = FastAPI(
 # ── CORS ───────────────────────────────────────────────────────────────────────
 ALLOWED_ORIGINS = os.getenv(
     "CORS_ORIGINS",
-    "http://localhost:5173,http://localhost:4173,http://localhost:3000",
+    "http://localhost:5173,http://localhost:4173,http://localhost:3000, https://amd-act2-vue-neuclea.vercel.app",
 ).split(",")
 
 app.add_middleware(
@@ -72,7 +72,7 @@ Disallow: /products?sort=
 Disallow: /products?q=
 
 # Agent manifest — machine-readable, intentionally public
-Allow: /.well-known/agents.json
+Allow: /agents.json
 
 Sitemap: https://novamart.example/sitemap.xml
 """
@@ -84,10 +84,10 @@ def robots_txt():
 
 
 # ── agents.json ─────────────────────────────────────────────────────────────────
-AGENTS_JSON_PATH = Path(__file__).parent / "agents.json"
+AGENTS_JSON_PATH = Path(_file_).parent / "agents.json"
 
 
-@app.get("/.well-known/agents.json", include_in_schema=False)
+@app.get("/agents.json", include_in_schema=False)
 def agents_manifest():
     data = json.loads(AGENTS_JSON_PATH.read_text(encoding="utf-8"))
     return JSONResponse(content=data)
