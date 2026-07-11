@@ -41,18 +41,20 @@ type AgentResponse struct {
 }
 
 type Agent struct {
-	LLM      *llm.Client
-	Pool     *mcp.Pool
-	MaxSteps int
-	Debug    bool
+	LLM          *llm.Client
+	Pool         *mcp.Pool
+	MaxSteps     int
+	Debug        bool
+	ThoughtChain chan string
 }
 
 func NewAgent(llmClient *llm.Client, pool *mcp.Pool) *Agent {
 	return &Agent{
-		LLM:      llmClient,
-		Pool:     pool,
-		MaxSteps: 5,
-		Debug:    true,
+		LLM:          llmClient,
+		Pool:         pool,
+		MaxSteps:     5,
+		Debug:        true,
+		ThoughtChain: make(chan string, 10),
 	}
 }
 
@@ -71,6 +73,7 @@ func (a *Agent) Execute(ctx context.Context, query string, tools []llm.Tool, end
 		if a.Debug {
 			fmt.Printf("\n🔄 Step %d/%d\n", state.CurrentStep, state.MaxSteps)
 		}
+		a.sendThought(fmt.Sprintf("🔄 Step %d/%d", state.CurrentStep, state.MaxSteps))
 		select {
 		case <-ctx.Done():
 			return &AgentResponse{
@@ -85,6 +88,7 @@ func (a *Agent) Execute(ctx context.Context, query string, tools []llm.Tool, end
 		if err != nil {
 			return nil, fmt.Errorf("planning failed: %w", err)
 		}
+		a.sendThought(fmt.Sprintf("Thought %s", plan.Thought))
 		if a.Debug {
 			fmt.Printf("💭 Thought: %s\n", plan.Thought)
 			fmt.Printf("🎯 Action: %s\n", plan.Action)
@@ -133,6 +137,7 @@ func (a *Agent) Execute(ctx context.Context, query string, tools []llm.Tool, end
 		if plan.Action == "tool_call" {
 			toolCallCount[plan.Tool]++
 			if toolCallCount[plan.Tool] > 3 {
+				a.sendThought(fmt.Sprintf("⚠️ Too many calls to %s, forcing final answer", plan.Tool))
 				if a.Debug {
 					fmt.Printf("⚠️ Too many calls to %s, forcing final answer\n", plan.Tool)
 				}
@@ -152,6 +157,7 @@ func (a *Agent) Execute(ctx context.Context, query string, tools []llm.Tool, end
 					Thought:   "Completed after multiple attempts",
 				}, nil
 			}
+			a.sendThought(fmt.Sprintf("Calling tool: %s", plan.Tool))
 			execution, err := a.executeTool(ctx, state, plan)
 			if err != nil {
 				execution = &ToolExecution{
@@ -161,10 +167,12 @@ func (a *Agent) Execute(ctx context.Context, query string, tools []llm.Tool, end
 					Success:    false,
 					Timestamp:  time.Now(),
 				}
+				a.sendThought(fmt.Sprintf("❌ Tool Failed to respond: %s", err.Error()))
 				if a.Debug {
 					fmt.Printf("❌ Tool execution failed: %v\n", err)
 				}
 			} else {
+				a.sendThought(fmt.Sprintf("✅ Tool executed successfully: %s", plan.Tool))
 				if a.Debug {
 					fmt.Printf("✅ Tool execution successful\n")
 				}
@@ -187,6 +195,16 @@ func (a *Agent) Execute(ctx context.Context, query string, tools []llm.Tool, end
 		Thought:   "Task incomplete",
 		ToolCalls: state.ToolHistory,
 	}, nil
+}
+
+func (a *Agent) sendThought(thought string) {
+	if a.ThoughtChain != nil {
+		select {
+		case a.ThoughtChain <- thought:
+		default:
+			// Channel full, skip
+		}
+	}
 }
 
 func (a *Agent) formatToolResults(history []ToolExecution) string {

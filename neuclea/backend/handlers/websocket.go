@@ -288,6 +288,7 @@ func (h *Handler) handleQuery(s *session, msg WSMessage) {
 			},
 		})
 	}
+
 	h.send(s, ServerResponse{
 		Type: "query.status",
 		ID:   msg.ID,
@@ -296,9 +297,34 @@ func (h *Handler) handleQuery(s *session, msg WSMessage) {
 			"message": "🧠 Agent thinking...",
 		},
 	})
+
+	// Create a channel for thoughts
+	thoughtChan := make(chan string, 10)
+	h.Agent.ThoughtChain = thoughtChan
+
+	// Start a goroutine to forward thoughts
+	go func() {
+		for thought := range thoughtChan {
+			h.send(s, ServerResponse{
+				Type: "query.thought",
+				ID:   msg.ID,
+				OK:   true,
+				Payload: map[string]interface{}{
+					"thought":   thought,
+					"timestamp": time.Now().Format(time.RFC3339),
+				},
+			})
+		}
+	}()
+
 	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 	defer cancel()
+
 	agentResponse, err := h.Agent.Execute(ctx, p.Query, llmTools, endpoint)
+
+	// Close the thought channel after execution
+	close(thoughtChan)
+
 	if err != nil {
 		h.send(s, ServerResponse{Type: "query", ID: msg.ID, OK: false, Error: err.Error()})
 		return
