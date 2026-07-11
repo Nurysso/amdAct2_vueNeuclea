@@ -84,7 +84,7 @@ def robots_txt():
 
 
 # ── agents.json ─────────────────────────────────────────────────────────────────
-AGENTS_JSON_PATH = Path(_file_).parent / "agents.json"
+AGENTS_JSON_PATH = Path(__file__).parent / "agents.json"
 
 
 @app.get("/agents.json", include_in_schema=False)
