@@ -1,36 +1,41 @@
-import { Link } from 'react-router-dom'
-import type { Product } from '../types/product'
-import './ProductCard.css'
+import { Link } from 'react-router-dom';
+import type { Product } from '../types/product';
+import './ProductCard.css';
 
 interface ProductCardProps {
-  product: Product
-  index?: number
+  product: Product;
+  index?: number;
 }
 
 const CATEGORY_BADGE: Record<string, string> = {
-  'Electronics':    'badge-teal',
-  'Clothing':       'badge-amber',
-  'Home & Garden':  'badge-success',
-  'Books':          'badge-ghost',
-}
+  Electronics: 'badge-teal',
+  Clothing: 'badge-amber',
+  'Home & Garden': 'badge-success',
+  Books: 'badge-ghost',
+};
 
 function Stars({ rating }: { rating: number }) {
-  const full = Math.floor(rating)
-  const half = rating % 1 >= 0.5
+  const full = Math.floor(rating);
+  const half = rating % 1 >= 0.5;
   return (
     <span className="stars" aria-label={`${rating} out of 5`}>
       {Array.from({ length: 5 }, (_, i) => (
-        <span key={i} style={{ opacity: i < full ? 1 : half && i === full ? 0.5 : 0.2 }}>★</span>
+        <span key={i} style={{ opacity: i < full ? 1 : half && i === full ? 0.5 : 0.2 }}>
+          ★
+        </span>
       ))}
-      <span className="card-rating-value text-tertiary tabular" style={{ fontFamily: 'var(--font-mono)', marginLeft: 4 }}>
+      <span
+        className="card-rating-value text-tertiary tabular"
+        style={{ fontFamily: 'var(--font-mono)', marginLeft: 4 }}
+      >
         {rating.toFixed(1)}
       </span>
     </span>
-  )
+  );
 }
 
 export function ProductCard({ product, index = 0 }: ProductCardProps) {
-  const badgeClass = CATEGORY_BADGE[product.category] ?? 'badge-ghost'
+  const badgeClass = CATEGORY_BADGE[product.category] ?? 'badge-ghost';
 
   return (
     <Link
@@ -60,9 +65,11 @@ export function ProductCard({ product, index = 0 }: ProductCardProps) {
         <div className="card-meta">
           <Stars rating={product.rating} />
           <span className="card-stock text-tertiary">
-            {product.stock > 0
-              ? <span className="text-secondary">{product.stock} left</span>
-              : <span className="text-error">Out of stock</span>}
+            {product.stock > 0 ? (
+              <span className="text-secondary">{product.stock} left</span>
+            ) : (
+              <span className="text-error">Out of stock</span>
+            )}
           </span>
         </div>
 
@@ -72,20 +79,22 @@ export function ProductCard({ product, index = 0 }: ProductCardProps) {
         </div>
       </div>
 
-      {/* ── SIGNATURE: JSON extraction strip ────────────────────────────────── */}
       {/* This strip visualises exactly what agents.json tells an agent to grab. */}
-      <div className="code-strip card-json-strip" aria-hidden="true">
-        <span className="punct">{"{"}</span>
-        <span className="key">"id"</span><span className="punct">:</span>
+      {/* <div className="code-strip card-json-strip" aria-hidden="true">
+        <span className="punct">{'{'}</span>
+        <span className="key">"id"</span>
+        <span className="punct">:</span>
         <span className="value">{product.id}</span>
         <span className="punct">,</span>
-        <span className="key">"price"</span><span className="punct">:</span>
+        <span className="key">"price"</span>
+        <span className="punct">:</span>
         <span className="value">{product.price.toFixed(2)}</span>
         <span className="punct">,</span>
-        <span className="key">"category"</span><span className="punct">:</span>
+        <span className="key">"category"</span>
+        <span className="punct">:</span>
         <span className="value">"{product.category}"</span>
-        <span className="punct">{"}"}</span>
-      </div>
+        <span className="punct">{'}'}</span>
+      </div> */}
     </Link>
-  )
+  );
 }

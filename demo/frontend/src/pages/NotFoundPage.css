@@ -1,0 +1,27 @@
+/* NotFoundPage.css */
+.not-found {
+  text-align: center;
+  padding: var(--space-20) 0;
+}
+
+.not-found-code {
+  font-family: var(--font-mono);
+  font-size: 72px;
+  font-weight: 700;
+  color: var(--text-muted);
+  letter-spacing: -0.04em;
+  line-height: 1;
+  margin-bottom: var(--space-4);
+  background: linear-gradient(135deg, var(--text-muted), var(--text-tertiary));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.not-found-actions {
+  display: flex;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  justify-content: center;
+  margin-top: var(--space-6);
+}

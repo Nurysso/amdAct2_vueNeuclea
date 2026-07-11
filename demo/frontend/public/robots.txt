@@ -10,7 +10,7 @@ Allow: /products/
 Allow: /about
 Allow: /blog
 Allow: /faq
-Allow: /.well-known/agents.json
+Allow: /agents.json
 
 # Session-specific / PII-containing — disallowed
 Disallow: /cart

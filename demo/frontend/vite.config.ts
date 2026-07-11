@@ -1,5 +1,5 @@
-import { defineConfig } from 'vite'
-import react from '@vitejs/plugin-react'
+import react from '@vitejs/plugin-react';
+import { defineConfig } from 'vite';
 
 // https://vite.dev/config/
 export default defineConfig({
@@ -8,13 +8,13 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': {
-        target: 'http://localhost:8000',
+        target: 'https://dummy-backend-amdact2-vueneuclea.onrender.com/',
         changeOrigin: true,
       },
       '/.well-known': {
-        target: 'http://localhost:8000',
+        target: 'https://dummy-backend-amdact2-vueneuclea.onrender.com/',
         changeOrigin: true,
       },
     },
   },
-})
+});

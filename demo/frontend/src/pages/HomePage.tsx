@@ -1,10 +1,10 @@
-import { Link } from 'react-router-dom'
-import { useProducts } from '../hooks/useProducts'
-import { ProductCard } from '../components/ProductCard'
-import './HomePage.css'
+import { Link } from 'react-router-dom';
+import { ProductCard } from '../components/ProductCard';
+import { useProducts } from '../hooks/useProducts';
+import './HomePage.css';
 
 export function HomePage() {
-  const { products: featured } = useProducts({ limit: 4 })
+  const { products: featured } = useProducts({ limit: 4 });
 
   return (
     <main className="page home-page">
@@ -13,22 +13,29 @@ export function HomePage() {
         <div className="container hero-inner">
           <div className="hero-eyebrow">
             <span className="badge badge-teal">
-              <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                <circle cx="12" cy="12" r="12"/>
+              <svg
+                width="10"
+                height="10"
+                viewBox="0 0 24 24"
+                fill="currentColor"
+                aria-hidden="true"
+              >
+                <circle cx="12" cy="12" r="12" />
               </svg>
               agents.json demo
             </span>
           </div>
 
           <h1 id="hero-heading" className="hero-heading">
-            Commerce built for<br/>
+            Commerce built for
+            <br />
             <span className="hero-accent">machine-readable agents</span>
           </h1>
 
           <p className="hero-subtext">
-            NovaMart ships an <code className="text-code">agents.json</code> manifest that tells
-            an agent exactly what to scrape and where — cutting crawl cost by <strong>~92%</strong>{' '}
-            vs. naive HTML crawling.
+            NovaMart ships an <code className="text-code">agents.json</code> manifest that tells an
+            agent exactly what to scrape and where — cutting crawl cost by <strong>~92%</strong> vs.
+            naive HTML crawling.
           </p>
 
           <div className="hero-actions">
@@ -36,7 +43,7 @@ export function HomePage() {
               Browse Products →
             </Link>
             <a
-              href="/.well-known/agents.json"
+              href="/agents.json"
               target="_blank"
               rel="noopener noreferrer"
               className="btn btn-ghost btn-lg"
@@ -58,8 +65,16 @@ export function HomePage() {
             </div>
 
             <div className="compare-vs">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="1.5" aria-hidden="true">
-                <path d="M5 12h14M12 5l7 7-7 7"/>
+              <svg
+                width="20"
+                height="20"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="var(--text-muted)"
+                strokeWidth="1.5"
+                aria-hidden="true"
+              >
+                <path d="M5 12h14M12 5l7 7-7 7" />
               </svg>
             </div>
 
@@ -114,19 +129,28 @@ export function HomePage() {
               <ul className="explainer-list">
                 <li>
                   <span className="explainer-icon">📍</span>
-                  <span><strong>Exact endpoints</strong> — no link-following required</span>
+                  <span>
+                    <strong>Exact endpoints</strong> — no link-following required
+                  </span>
                 </li>
                 <li>
                   <span className="explainer-icon">🗂️</span>
-                  <span><strong>Schema definition</strong> — field names, types, descriptions</span>
+                  <span>
+                    <strong>Schema definition</strong> — field names, types, descriptions
+                  </span>
                 </li>
                 <li>
                   <span className="explainer-icon">📄</span>
-                  <span><strong>Pagination hints</strong> — use <code className="text-code">limit=100</code> for one-shot retrieval</span>
+                  <span>
+                    <strong>Pagination hints</strong> — use{' '}
+                    <code className="text-code">limit=100</code> for one-shot retrieval
+                  </span>
                 </li>
                 <li>
                   <span className="explainer-icon">🚫</span>
-                  <span><strong>Explicit excludes</strong> — skip /cart, /blog, /about entirely</span>
+                  <span>
+                    <strong>Explicit excludes</strong> — skip /cart, /blog, /about entirely
+                  </span>
                 </li>
               </ul>
             </div>
@@ -136,33 +160,97 @@ export function HomePage() {
                 <span className="code-dot" style={{ background: '#F87171' }} />
                 <span className="code-dot" style={{ background: '#FBBF24' }} />
                 <span className="code-dot" style={{ background: '#4ADE80' }} />
-                <span className="code-filename text-tertiary">/.well-known/agents.json</span>
+                <span className="code-filename text-tertiary">/agents.json</span>
               </div>
-              <pre className="code-block"><code>{`{
-  "data_sources": [{
-    "endpoint": "/api/products",
-    "recommended_call": 
-      "GET /api/products?limit=100"
-  }],
-  "schema": {
-    "Product": {
-      "fields": {
-        "name":     { "type": "string" },
-        "price":    { "type": "float"  },
-        "category": { "type": "string" },
-        "image_url":{ "type": "string" }
-      }
-    }
+              <pre className="code-block">
+                <code>{`{
+  "schema_version": "1.1",
+  "name": "NovaMart API",
+  "description": "Mock e-commerce API powering the agents.json scraping demo.",
+  "mcp_server_url": "http://localhost:3000",
+  "environment": "development",
+  "auth": {
+    "type": "none"
   },
-  "excludes": {
-    "routes": ["/cart", "/checkout",
-               "/blog", "/about"]
-  }
-}`}</code></pre>
+  "capabilities": {
+    "streaming": false,
+    "batch_calls": true,
+    "max_concurrent_tools": 3
+  },
+  "rate_limits": {
+    "requests_per_minute": 60,
+    "requests_per_day": 10000
+  },
+  "tool_groups": [
+    {
+      "name": "products",
+      "description": "products operations",
+      "tools": ["list_products_api_products_get", "get_product_api_products__product_id__get"]
+    },
+    {
+      "name": "meta",
+      "description": "meta operations",
+      "tools": ["list_categories_api_categories_get"]
+    }
+  ],
+  "tools": [
+    {
+      "name": "list_products_api_products_get",
+      "description": "List Products",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "category": {
+            "type": "string",
+            "description": "Filter by category name"
+          },
+          "page": {
+            "type": "integer",
+            "description": "Page number (1-indexed)"
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Items per page"
+          }
+        }
+      },
+      "auth_required": false,
+      "read_only": true
+    },
+    {
+      "name": "get_product_api_products__product_id__get",
+      "description": "Get Product",
+      "input_schema": {
+        "type": "object",
+        "required": ["product_id"],
+        "properties": {
+          "product_id": {
+            "type": "integer",
+            "description": ""
+          }
+        }
+      },
+      "auth_required": false,
+      "read_only": true
+    },
+    {
+      "name": "list_categories_api_categories_get",
+      "description": "List Categories",
+      "input_schema": {
+        "type": "object",
+        "properties": {}
+      },
+      "auth_required": false,
+      "read_only": true
+    }
+  ]
+}
+`}</code>
+              </pre>
             </div>
           </div>
         </div>
       </section>
     </main>
-  )
+  );
 }

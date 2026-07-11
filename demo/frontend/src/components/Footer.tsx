@@ -1,5 +1,5 @@
-import { Link } from 'react-router-dom'
-import './Footer.css'
+import { Link } from 'react-router-dom';
+import './Footer.css';
 
 export function Footer() {
   return (
@@ -11,9 +11,8 @@ export function Footer() {
             <span>NovaMart</span>
           </div>
           <p className="footer-tagline">
-            A demo storefront proving that structured{' '}
-            <code className="text-code">agents.json</code> manifests make web scraping
-            dramatically more efficient than naive crawling.
+            A demo storefront proving that structured <code className="text-code">agents.json</code>{' '}
+            manifests make web scraping dramatically more efficient than naive crawling.
           </p>
         </div>
 
@@ -33,9 +32,19 @@ export function Footer() {
           </div>
           <div className="footer-col">
             <h4 className="footer-col-title">Agents</h4>
-            <a href="/.well-known/agents.json" target="_blank" rel="noopener noreferrer">agents.json</a>
-            <a href="/robots.txt" target="_blank" rel="noopener noreferrer">robots.txt</a>
-            <a href="http://localhost:8000/docs" target="_blank" rel="noopener noreferrer">API Docs</a>
+            <a href="/.well-known/agents.json" target="_blank" rel="noopener noreferrer">
+              agents.json
+            </a>
+            <a href="/robots.txt" target="_blank" rel="noopener noreferrer">
+              robots.txt
+            </a>
+            <a
+              href="https://dummy-backend-amdact2-vueneuclea.onrender.com/docs"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              API Docs
+            </a>
           </div>
         </div>
       </div>
@@ -54,5 +63,5 @@ export function Footer() {
         </div>
       </div>
     </footer>
-  )
+  );
 }
