@@ -268,7 +268,7 @@ async function main(): Promise<void> {
     ...(values['package-version'] && { packageVersion: values['package-version'] }),
   });
 
-  const telemetryPath = values['telemetry-path'] || '../vua/packages/telemetry';
+  const telemetryPath = values['telemetry-path'] || '../vis/packages/telemetry';
   const telemetryConfig = {
     enabled: values['telemetry'] !== false,
     prometheus: {

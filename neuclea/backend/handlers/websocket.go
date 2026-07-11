@@ -207,7 +207,9 @@ func (h *Handler) handleInit(s *session, msg WSMessage, raw []byte) {
 		h.send(s, ServerResponse{Type: "init", ID: msg.ID, OK: false, Error: "decode config: " + err.Error()})
 		return
 	}
-	endpoint := strings.TrimRight(cfg.MCPServerURL, "/mcp")
+	fmt.Printf("🔧 Actual URL: %s\n", cfg.MCPServerURL)
+	mcpURL := strings.TrimRight(cfg.MCPServerURL, "/")
+	endpoint := strings.TrimSuffix(mcpURL, "/mcp")
 	if endpoint == "" {
 		h.send(s, ServerResponse{Type: "init", ID: msg.ID, OK: false, Error: "mcp_server_url is required"})
 		return

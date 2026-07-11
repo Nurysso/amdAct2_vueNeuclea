@@ -357,24 +357,16 @@ export default function App() {
 
   // For Create React App
   const backendUrl = useMemo(() => {
-    const envUrl = import.meta.env.REACT_APP_WS_URL;
-    if (envUrl) {
-      return envUrl;
-    }
-
-    // Fallback
+    const envUrl = import.meta.env.VITE_WS_URL;
+    if (envUrl) return envUrl;
     const host = window.location.hostname;
     const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     return `${proto}//${host}:8080/ws`;
   }, []);
 
-  // For health checks or other HTTP requests:
   const httpBackendUrl = useMemo(() => {
     const envUrl = import.meta.env.VITE_BACKEND_URL;
-    if (envUrl) {
-      return envUrl;
-    }
-    // Fallback
+    if (envUrl) return envUrl;
     return `${window.location.protocol}//${window.location.hostname}:8080`;
   }, []);
 
@@ -517,7 +509,7 @@ export default function App() {
           handleServerMessage(JSON.parse(ev.data));
         } catch {}
       };
-      ws.onerror = () => pushError('WebSocket failed. Is the Go backend running on :8080?');
+      ws.onerror = () => pushError('WebSocket failed. the Go backend isnt running');
       ws.onclose = () => {
         setConnectedState(false);
       };

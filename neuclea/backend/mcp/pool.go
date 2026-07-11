@@ -5,15 +5,32 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"golang.org/x/time/rate"
 )
 
 type Pool struct {
-	mu      sync.RWMutex
-	clients map[string]*Client // key = endpoint URL
+	mu       sync.RWMutex
+	clients  map[string]*Client
+	limiters map[string]*rate.Limiter
 }
 
 func NewPool() *Pool {
-	return &Pool{clients: map[string]*Client{}}
+	return &Pool{
+		clients:  map[string]*Client{},
+		limiters: map[string]*rate.Limiter{},
+	}
+}
+
+func (p *Pool) getLimiter(endpoint string) *rate.Limiter {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if l, ok := p.limiters[endpoint]; ok {
+		return l
+	}
+	l := rate.NewLimiter(rate.Every(time.Second), 3)
+	p.limiters[endpoint] = l
+	return l
 }
 
 func (p *Pool) CallTool(ctx context.Context, endpoint string, tool string, params map[string]interface{}) (interface{}, error) {
@@ -21,8 +38,13 @@ func (p *Pool) CallTool(ctx context.Context, endpoint string, tool string, param
 	if c == nil {
 		return nil, fmt.Errorf("no mcp client for endpoint %q", endpoint)
 	}
+	// Wait for rate limiter before calling
+	if err := p.getLimiter(endpoint).Wait(ctx); err != nil {
+		return nil, fmt.Errorf("rate limiter: %w", err)
+	}
 	return c.CallTool(ctx, tool, params)
 }
+
 func (p *Pool) Add(endpoint string) *Client {
 	p.mu.Lock()
 	defer p.mu.Unlock()

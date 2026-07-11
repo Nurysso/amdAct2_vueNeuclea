@@ -1,147 +1,226 @@
-# Neuclea Backend
+# Neuclea
 
-A ReAct-based AI agent system that connects LLMs to external tools via the Model Context Protocol (MCP). The backend orchestrates tool calling, session management, and real-time communication through WebSockets.
+A WebSocket-based AI agent gateway that connects a chat frontend to any service exposing an [`agents.json`](https://amd-act2-vue-neuclea.vercel.app/agents.json) configuration and an MCP (Model Context Protocol) tool server.
 
-## Architecture
+---
+
+## How it works
 
 ```
-┌─────────────┐     WebSocket      ┌─────────────────┐     MCP Protocol     ┌─────────────┐     REST API     ┌─────────────────┐
-│   Client    │ ◄──────────────►   │ Neuclea Backend │ ◄──────────────────► │  MCP Server │ ◄─────────────►  │  Python API     │
-│  (Frontend) │                    │     (Go)        │                      │  (Node.js)  │                  │  (FastAPI)      │
-└─────────────┘                    └─────────────────┘                      └─────────────┘                  └─────────────────┘
+Browser (React)
+    │  WebSocket
+    ▼
+Go Backend (neuclea)
+    ├── Agent loop  →  Fireworks LLM (planning + formatting)
+    └── MCP client  →  Your MCP server (tool execution)
 ```
 
-### Components
+1. The frontend fetches `/agents.json` from any website URL the user enters.
+2. It sends the config over WebSocket to the Go backend (`init` message).
+3. The backend registers the MCP endpoint, loads available tools, and pre-fetches categories.
+4. On each user query, a ReAct-style agent loop runs: the LLM decides which tool to call, the MCP client executes it, results feed back into the next planning step, and a final formatted response streams back to the browser.
 
-1. **Neuclea Backend (Go)**:
-   - WebSocket server for real-time communication
-   - ReAct agent with LLM-powered reasoning
-   - Session management and telemetry
-   - MCP client for tool execution
+---
 
-## Features
+## Project structure
 
-- **ReAct Agent**: Think -> Act -> Observe loop with LLM reasoning
-- **Tool Calling**: Execute external tools via MCP protocol
-- **Session Management**: Isolated sessions with telemetry
-- **Real-time Communication**: WebSocket for live updates
-- **Predictor**: Markov-style tool transition prediction
-- **Health Checks**: Periodic MCP endpoint monitoring
+```
+.
+├── main.go               # HTTP server, CORS, graceful shutdown
+├── handlers/
+│   └── websocket.go      # WebSocket sessions, init/query/autocomplete handlers
+├── agent/
+│   └── agent.go          # ReAct agent loop (think → tool_call → final_answer)
+├── llm/
+│   └── client.go         # Fireworks / Ollama LLM client
+├── mcp/
+│   ├── client.go         # JSON-RPC MCP client with retry + backoff
+│   └── pool.go           # Per-endpoint client pool with rate limiting
+└── predictor/
+    └── predictor.go      # Markov-chain tool-sequence predictor
+```
+
+---
 
 ## Prerequisites
 
-- Go 1.21+
-- Ollama (local) or Fireworks API key
-- MCP Server (Node.js) running
-- Python API (FastAPI) running
+- Go 1.22+
+- A Fireworks AI API key (or a local Ollama instance)
+- An MCP server exposing `POST /mcp` (JSON-RPC 2.0)
+- An `agents.json` reachable at `<your-site>/agents.json`
 
-## Configuration
+---
 
-### Environment Variables
+## Environment variables
 
-| Variable            | Description                            | Default                                           |
-| ------------------- | -------------------------------------- | ------------------------------------------------- |
-| `LLM_PROVIDER`      | LLM provider (`ollama` or `fireworks`) | `ollama`                                          |
-| `OLLAMA_MODEL`      | Ollama model name                      | `llama3`                                          |
-| `FIREWORKS_API_KEY` | Fireworks API key                      | -                                                 |
-| `FIREWORKS_MODEL`   | Fireworks model                        | `accounts/fireworks/models/llama-v3-70b-instruct` |
-| `OLLAMA_URL`        | Ollama API URL                         | `http://localhost:11434`                          |
+| Variable            | Description             | Default                                            |
+| ------------------- | ----------------------- | -------------------------------------------------- |
+| `LLM_PROVIDER`      | `fireworks` or `ollama` | `fireworks`                                        |
+| `FIREWORKS_API_KEY` | Fireworks AI API key    | required if provider=fireworks                     |
+| `FIREWORKS_MODEL`   | Model ID to use         | `accounts/fireworks/models/llama-v3p1-8b-instruct` |
+| `OLLAMA_URL`        | Ollama base URL         | `http://localhost:11434`                           |
+| `OLLAMA_MODEL`      | Ollama model name       | `llama3`                                           |
 
-### Example `.env`
+Copy `.env.example` to `.env` for local development:
 
 ```env
-LLM_PROVIDER=ollama
+LLM_PROVIDER=fireworks
 FIREWORKS_API_KEY=your_key_here
-OLLAMA_MODEL=llama3.2:1b
-FIREWORKS_MODEL=accounts/fireworks/models/llama-v3-70b-instruct
 ```
 
-## Project Structure
+---
 
-```
-neuclea/
-├── main.go                 # Entry point, server setup
-├── agent/
-│   └── agent.go           # ReAct agent implementation
-├── handlers/
-│   ├── websocket.go       # WebSocket handlers
-│   └── agents.go          # Agent configuration schema
-├── llm/
-│   ├── fireworks.go       # Fireworks AI client
-│   └── client.go          # LLM client interface
-├── mcp/
-│   ├── client.go          # MCP protocol client
-│   └── pool.go            # MCP connection pool
-├── predictor/
-│   └── simple.go          # Markov-style predictor
-└── intent/
-    └── classifier.go      # Intent classification
+## Running locally
+
+```bash
+go mod download
+go build -o neuclea .
+./neuclea
+# listening on :8080
 ```
 
-## How It Works
+The server exposes:
 
-### ReAct Loop
+| Endpoint         | Description                          |
+| ---------------- | ------------------------------------ |
+| `GET /health`    | JSON health check with provider info |
+| `WS /ws`         | WebSocket gateway                    |
+| `GET /telemetry` | Session stats and predictor metrics  |
 
-1. **Think**: LLM analyzes the query and decides the next action
-2. **Act**: Execute a tool call or provide a final answer
-3. **Observe**: Process the tool result and feed back to the LLM
+---
 
-### Tool Execution Flow
+## agents.json format
 
-1. User sends query via WebSocket
-2. Agent enters ReAct loop
-3. LLM decides which tool to call
-4. Agent calls MCP client with tool name and parameters
-5. MCP server forwards to Python API
-6. Python API returns data
-7. Agent formats response and streams back to user
+The frontend fetches this from the target site. Minimum required fields:
 
-### Session Management
+```json
+{
+  "schema_version": "1.1",
+  "name": "My API Agent",
+  "description": "What this agent does.",
+  "mcp_server_url": "https://your-mcp-server.example.com",
+  "tools": [
+    {
+      "name": "list_products_api_products_get",
+      "description": "List products with optional category filter.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "category": { "type": "string", "description": "Product category" },
+          "page": { "type": "integer", "description": "Page number" },
+          "limit": { "type": "integer", "description": "Results per page" }
+        }
+      }
+    }
+  ]
+}
+```
 
-- Each WebSocket connection gets a unique session ID
-- Sessions store tool configurations and telemetry
-- Idle sessions are automatically cleaned up (2-minute timeout)
-- All sessions are visible via `/telemetry` endpoint
+The `mcp_server_url` must point to a server accepting `POST /mcp` with JSON-RPC 2.0 `tools/call` requests.
 
-### Predictor
+---
 
-- Tracks tool transitions (Tool A → Tool B)
-- Predicts next likely tools for autocomplete
-- Used for pre-warming MCP connections
+## WebSocket protocol
 
-## Troubleshooting
+All messages are JSON with a `type` field.
 
-### Common Issues
+### Client → Server
 
-1. **MCP Connection Failed**
-   - Ensure MCP server is running on `http://localhost:3000`
-   - Check MCP server logs for errors
+**Initialize a session:**
 
-2. **LLM Not Responding**
-   - Verify Ollama is running: `ollama ps`
-   - Check model is installed: `ollama list`
-   - For Fireworks, verify API key is valid
+```json
+{
+  "type": "init",
+  "payload": {
+    /* full agents.json object */
+  }
+}
+```
 
-3. **Tool Type Errors**
-   - Ensure `page` and `limit` are numbers, not strings
-   - Check `agents.json` schema matches actual API
+**Send a query:**
 
-4. **WebSocket Connection Issues**
-   - Verify frontend is using correct URL: `ws://localhost:8080/ws`
-   - Check for CORS issues
+```json
+{
+  "type": "query",
+  "payload": { "query": "Show me cameras under $500" }
+}
+```
 
-## Performance Tuning
+**Ping:**
 
-- **Max Steps**: Adjust `Agent.MaxSteps` (default: 30)
-- **Timeout**: Adjust `context.WithTimeout` (default: 180s)
-- **Idle Timeout**: Adjust `Handler.IdleTimeout` (default: 2min)
-- **MCP Pool**: Pool manages multiple MCP endpoints
+```json
+{ "type": "ping" }
+```
 
-## Dependencies
+### Server → Client
 
-- [gorilla/websocket](https://github.com/gorilla/websocket) - WebSocket support
-- [joho/godotenv](https://github.com/joho/godotenv) - Environment variables
+| Type               | When                                  |
+| ------------------ | ------------------------------------- |
+| `init`             | Session initialized, tools loaded     |
+| `query.status`     | Status update during agent execution  |
+| `query.thought`    | Agent reasoning step (streamed)       |
+| `query.tool`       | Tool call result                      |
+| `query.chunk`      | Streamed text chunk of final response |
+| `query`            | Final response (complete)             |
+| `session.sleeping` | Session paused after idle timeout     |
+| `session.resumed`  | Session resumed after activity        |
+| `pong`             | Response to ping                      |
+| `error`            | Error on any message                  |
 
-## License
+---
 
-Apache
+## MCP client behaviour
+
+- **Retries:** up to 3 attempts with exponential backoff (5s → 10s → 20s + jitter) on HTTP 429.
+- **Rate limiting:** 1 req/sec per endpoint, burst of 3, enforced in the pool before hitting the server.
+- **Cold start guard:** HTML responses (Render free tier wake-up pages) are detected via `Content-Type` and surfaced as a clear error instead of a JSON parse failure.
+
+---
+
+## Agent loop
+
+The agent runs a maximum of 5 ReAct steps per query:
+
+1. **Think** — LLM receives the query, tool schemas, and all previous tool results, then outputs a JSON plan (`tool_call` or `final_answer`).
+2. **Act** — The chosen tool is called via the MCP client.
+3. **Observe** — The result (or error) is appended to state and fed into the next think step.
+4. **Terminate early** if: the same tool fails 3 times in a row, any tool is called more than 3 times, or the MCP server returns a rate-limit error.
+
+After execution, the raw tool results are passed to a second LLM call (`FormatResponse`) that produces the final user-facing markdown response, streamed chunk by chunk.
+
+---
+
+### CORS
+
+The backend allows `https://neuclea-console.vercel.app` by default. To add origins, edit `withCORS` in `main.go`:
+
+```go
+allowed := map[string]bool{
+    "https://neuclea-console.vercel.app": true,
+    "https://your-other-origin.com":      true,
+}
+```
+
+---
+
+## Telemetry
+
+`GET /telemetry` returns a snapshot of all active sessions and aggregate stats:
+
+```json
+{
+  "session_count": 1,
+  "initialized_sessions": 1,
+  "aggregate": {
+    "total_queries": 12,
+    "avg_response_ms": 3400,
+    "prediction_accuracy": 0.75
+  },
+  "predictor": {
+    "transitions_recorded": 48,
+    "unique_from_tools": 3
+  }
+}
+```
+
+The predictor tracks tool call sequences using a Markov chain and uses them to power autocomplete suggestions in the frontend.

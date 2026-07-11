@@ -68,12 +68,14 @@ func (a *Agent) Execute(ctx context.Context, query string, tools []llm.Tool, end
 		Endpoint:    endpoint,
 	}
 	toolCallCount := make(map[string]int)
+
 	for !state.Completed && state.CurrentStep < state.MaxSteps {
 		state.CurrentStep++
 		if a.Debug {
 			fmt.Printf("\n🔄 Step %d/%d\n", state.CurrentStep, state.MaxSteps)
 		}
 		a.sendThought(fmt.Sprintf("🔄 Step %d/%d", state.CurrentStep, state.MaxSteps))
+
 		select {
 		case <-ctx.Done():
 			return &AgentResponse{
@@ -84,6 +86,7 @@ func (a *Agent) Execute(ctx context.Context, query string, tools []llm.Tool, end
 			}, nil
 		default:
 		}
+
 		plan, err := a.think(ctx, state)
 		if err != nil {
 			return nil, fmt.Errorf("planning failed: %w", err)
@@ -93,17 +96,16 @@ func (a *Agent) Execute(ctx context.Context, query string, tools []llm.Tool, end
 			fmt.Printf("💭 Thought: %s\n", plan.Thought)
 			fmt.Printf("🎯 Action: %s\n", plan.Action)
 		}
+
 		if plan.Action == "final_answer" {
 			state.Completed = true
 			state.FinalResponse = plan.Thought
 
-			// Build a message with the tool results
 			var messageBuilder strings.Builder
 			if len(state.ToolHistory) > 0 {
 				messageBuilder.WriteString("Here are the results:\n\n")
 				for _, exec := range state.ToolHistory {
 					if exec.Success && exec.Result != nil {
-						// Try to format product data
 						if resultMap, ok := exec.Result.(map[string]interface{}); ok {
 							if data, ok := resultMap["data"]; ok {
 								if dataSlice, ok := data.([]interface{}); ok {
@@ -134,6 +136,7 @@ func (a *Agent) Execute(ctx context.Context, query string, tools []llm.Tool, end
 				Confidence: 0.95,
 			}, nil
 		}
+
 		if plan.Action == "tool_call" {
 			toolCallCount[plan.Tool]++
 			if toolCallCount[plan.Tool] > 3 {
@@ -157,9 +160,39 @@ func (a *Agent) Execute(ctx context.Context, query string, tools []llm.Tool, end
 					Thought:   "Completed after multiple attempts",
 				}, nil
 			}
+
 			a.sendThought(fmt.Sprintf("Calling tool: %s", plan.Tool))
 			execution, err := a.executeTool(ctx, state, plan)
 			if err != nil {
+				isRateLimited := strings.Contains(err.Error(), "rate limited") || strings.Contains(err.Error(), "429")
+				if isRateLimited {
+					a.sendThought("⏸️ Rate limited — stopping early")
+					if a.Debug {
+						fmt.Printf("⏸️ Rate limited on %s\n", plan.Tool)
+					}
+					rateLimitedExec := &ToolExecution{
+						Tool:       plan.Tool,
+						Parameters: plan.Parameters,
+						Error:      "RATE_LIMITED: Stop calling this tool. Provide a final answer from what you already have.",
+						Success:    false,
+						Timestamp:  time.Now(),
+					}
+					state.ToolHistory = append(state.ToolHistory, *rateLimitedExec)
+					resultMsg := a.formatToolResults(state.ToolHistory)
+					msg := "I'm being rate limited by the data service. "
+					if resultMsg != "" {
+						msg += "Here's what I found before hitting the limit:\n\n" + resultMsg
+					} else {
+						msg += "Please try again in a moment."
+					}
+					return &AgentResponse{
+						Final:     true,
+						Message:   msg,
+						ToolCalls: state.ToolHistory,
+						Thought:   "Rate limited by MCP server",
+					}, nil
+				}
+				// Non-rate-limit error: record and let the agent loop continue
 				execution = &ToolExecution{
 					Tool:       plan.Tool,
 					Parameters: plan.Parameters,
@@ -167,7 +200,7 @@ func (a *Agent) Execute(ctx context.Context, query string, tools []llm.Tool, end
 					Success:    false,
 					Timestamp:  time.Now(),
 				}
-				a.sendThought(fmt.Sprintf("❌ Tool Failed to respond: %s", err.Error()))
+				a.sendThought(fmt.Sprintf("❌ Tool failed: %s", err.Error()))
 				if a.Debug {
 					fmt.Printf("❌ Tool execution failed: %v\n", err)
 				}
@@ -180,6 +213,7 @@ func (a *Agent) Execute(ctx context.Context, query string, tools []llm.Tool, end
 			state.ToolHistory = append(state.ToolHistory, *execution)
 		}
 	}
+
 	resultMsg := a.formatToolResults(state.ToolHistory)
 	if resultMsg != "" {
 		return &AgentResponse{
@@ -232,6 +266,15 @@ func (a *Agent) formatToolResults(history []ToolExecution) string {
 }
 
 func (a *Agent) think(ctx context.Context, state *AgentState) (*llm.AgentPlan, error) {
+	if len(state.ToolHistory) > 0 {
+		last := state.ToolHistory[len(state.ToolHistory)-1]
+		if strings.Contains(last.Error, "RATE_LIMITED") {
+			return &llm.AgentPlan{
+				Thought: "Rate limited by the data service. Providing best answer from available data.",
+				Action:  "final_answer",
+			}, nil
+		}
+	}
 	if len(state.ToolHistory) > 2 {
 		lastThree := state.ToolHistory[len(state.ToolHistory)-3:]
 		allSame := true
@@ -378,6 +421,9 @@ func (a *Agent) executeTool(ctx context.Context, state *AgentState, plan *llm.Ag
 	if client == nil {
 		return nil, fmt.Errorf("MCP client not found for endpoint: %s", state.Endpoint)
 	}
+	if plan.Parameters == nil {
+		plan.Parameters = make(map[string]interface{})
+	}
 	if a.Debug {
 		fmt.Printf("🔧 Calling tool: %s with params: %+v\n", plan.Tool, plan.Parameters)
 		fmt.Printf("🔧 Parameter types: ")
@@ -386,9 +432,7 @@ func (a *Agent) executeTool(ctx context.Context, state *AgentState, plan *llm.Ag
 		}
 		fmt.Println()
 	}
-	if plan.Parameters == nil {
-		plan.Parameters = make(map[string]interface{})
-	}
+
 	result, err := client.CallTool(ctx, plan.Tool, plan.Parameters)
 	if err != nil {
 		if a.Debug {
@@ -402,6 +446,7 @@ func (a *Agent) executeTool(ctx context.Context, state *AgentState, plan *llm.Ag
 			Timestamp:  time.Now(),
 		}, err
 	}
+
 	if a.Debug {
 		fmt.Printf("✅ Tool executed successfully\n")
 	}

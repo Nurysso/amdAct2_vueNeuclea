@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
+	"math/rand"
 	"net/http"
 	"strings"
 	"sync"
@@ -127,16 +129,46 @@ func (c *Client) CallTool(ctx context.Context, tool string, params map[string]in
 			}
 		}
 	}
-	fmt.Printf("🔧 MCP CallTool - Tool: %s, Params: %+v\n", tool, params)
 
-	rpcID := float64(time.Now().UnixNano()) / 1e9
+	const maxRetries = 3
+	backoff := 5 * time.Second
 
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		result, status, err := c.doCall(ctx, tool, params)
+		if err != nil {
+			return nil, err
+		}
+		if status == http.StatusTooManyRequests {
+			if attempt == maxRetries-1 {
+				return nil, fmt.Errorf("mcp rate limited on %q after %d attempts", tool, maxRetries)
+			}
+			// Add jitter to avoid thundering herd
+			jitter := time.Duration(rand.Int63n(int64(backoff / 2)))
+			wait := backoff + jitter
+			log.Printf("🚦 MCP 429 on %s — backing off %s (attempt %d/%d)", tool, wait, attempt+1, maxRetries)
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(wait):
+			}
+			backoff *= 2 // 5s → 10s → 20s
+			continue
+		}
+		return result, nil
+	}
+	return nil, fmt.Errorf("mcp: exhausted retries for %q", tool)
+}
+
+func (c *Client) doCall(ctx context.Context, tool string, params map[string]interface{}) (interface{}, int, error) {
 	for k, v := range params {
 		if s, ok := v.(string); ok {
 			params[k] = sanitizeStringParam(s)
 		}
 	}
 
+	fmt.Printf("🔧 MCP CallTool - Tool: %s, Params: %+v\n", tool, params)
+
+	rpcID := float64(time.Now().UnixNano()) / 1e9
 	reqBody := JSONRPCRequest{
 		JSONRPC: "2.0",
 		ID:      rpcID,
@@ -146,45 +178,57 @@ func (c *Client) CallTool(ctx context.Context, tool string, params map[string]in
 
 	body, err := json.Marshal(reqBody)
 	if err != nil {
-		return nil, fmt.Errorf("marshal call: %w", err)
+		return nil, 0, fmt.Errorf("marshal call: %w", err)
 	}
 	fmt.Printf("🔧 MCP Request Body: %s\n", string(body))
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.Endpoint+"/mcp", bytes.NewReader(body))
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", "neuclea-agent/1.0")
 
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("mcp call failed: %w", err)
+		return nil, 0, fmt.Errorf("mcp call failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("read mcp body: %w", err)
+		return nil, resp.StatusCode, fmt.Errorf("read mcp body: %w", err)
 	}
 
 	fmt.Printf("🔧 MCP Response Status: %d\n", resp.StatusCode)
 	fmt.Printf("🔧 MCP Response Body: %s\n", string(raw))
 
+	// Return 429 status to caller for retry handling
+	if resp.StatusCode == http.StatusTooManyRequests {
+		return nil, resp.StatusCode, nil
+	}
+
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("mcp status %d: %s", resp.StatusCode, string(raw))
+		return nil, resp.StatusCode, fmt.Errorf("mcp status %d: %s", resp.StatusCode, string(raw))
+	}
+
+	// Guard against HTML error pages from Render cold starts
+	ct := resp.Header.Get("Content-Type")
+	if !strings.Contains(ct, "application/json") {
+		return nil, resp.StatusCode, fmt.Errorf("mcp returned non-JSON (Content-Type: %s) — server may be waking up", ct)
 	}
 
 	var rpcResp JSONRPCResponse
 	if err := json.Unmarshal(raw, &rpcResp); err != nil {
-		return nil, fmt.Errorf("unmarshal mcp response: %w", err)
+		return nil, resp.StatusCode, fmt.Errorf("unmarshal mcp response: %w", err)
 	}
 
 	if rpcResp.Error != nil {
-		return nil, fmt.Errorf("mcp error [%d]: %s", rpcResp.Error.Code, rpcResp.Error.Message)
+		return nil, resp.StatusCode, fmt.Errorf("mcp error [%d]: %s", rpcResp.Error.Code, rpcResp.Error.Message)
 	}
 
-	// Parse the result to extract the actual data
-	return extractResult(rpcResp.Result), nil
+	return extractResult(rpcResp.Result), resp.StatusCode, nil
 }
 
 // extractResult extracts the actual data from the MCP result structure
