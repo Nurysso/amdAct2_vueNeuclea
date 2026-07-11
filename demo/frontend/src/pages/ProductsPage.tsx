@@ -1,8 +1,8 @@
-import { useMemo, useState } from 'react';
+import { useState, useMemo } from 'react';
+import { useProducts } from '../hooks/useProducts';
+import { ProductCard } from '../components/ProductCard';
 import { CategoryFilter } from '../components/CategoryFilter';
 import { LoadingGrid } from '../components/LoadingGrid';
-import { ProductCard } from '../components/ProductCard';
-import { useProducts } from '../hooks/useProducts';
 import './ProductsPage.css';
 
 export function ProductsPage() {
