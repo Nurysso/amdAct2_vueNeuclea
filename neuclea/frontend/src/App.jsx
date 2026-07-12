@@ -563,7 +563,16 @@ export default function App() {
     <div style={s.page}>
       <div style={s.topNav}>
         <div style={s.navLeft}>
-          <div style={s.logoMark}>N</div>
+          <img
+            src="/favicon-96x96.png"
+            alt="Neuclea Logo"
+            style={{
+              ...s.logoMark,
+              width: '40px',
+              height: 'auto',
+              objectFit: 'contain',
+            }}
+          />{' '}
           <div style={s.productTitle}>Neuclea</div>
           {agentCfg && (
             <>
@@ -595,50 +604,54 @@ export default function App() {
           {!connected ? (
             <div style={s.connectContainer}>
               <div style={s.connectCardWrap}>
-                <div style={s.connectCard}>
-                  <div style={s.connectEyebrow}>AGENT DISCOVERY</div>
-                  <div style={s.connectTitle}>Connect to an agent</div>
-                  <div style={s.connectDesc}>
-                    Enter a website URL to discover its{' '}
-                    <code style={s.inlineCode}>/agents.json</code> configuration and start a
-                    session.
-                  </div>
-                  <div style={s.connectForm}>
-                    <input
-                      style={s.connectInput}
-                      type="text"
-                      placeholder="https://amd-act2-vue-neuclea.vercel.app"
-                      value={url}
-                      onChange={(e) => setUrl(e.target.value)}
-                      onKeyDown={(e) => e.key === 'Enter' && handleCheck()}
-                      autoFocus
-                    />
-                    <button
-                      style={{
-                        ...s.discoverBtn,
-                        ...(checking ? { opacity: 0.7 } : null),
-                      }}
-                      onClick={handleCheck}
-                      disabled={checking}
-                    >
-                      {checking ? 'Discovering…' : 'Discover'}
-                    </button>
-                  </div>
-                  {errorBanner && <div style={s.errorBanner}>{errorBanner}</div>}
-                  <div style={s.connectSteps}>
-                    <div style={s.connectStep}>
-                      <div style={s.connectStepNum}>01</div>
-                      <div style={s.connectStepLabel}>Enter site URL</div>
+                <div
+                  style={{
+                    ...s.connectGradientBorder,
+                  }}
+                  className="gradient-border"
+                >
+                  <div style={s.connectCard}>
+                    <div style={s.connectEyebrow}>AGENT DISCOVERY</div>
+                    <div style={s.connectTitle}>Connect to an agent</div>
+                    <div style={s.connectDesc}>
+                      Enter a website URL to discover its{' '}
+                      <code style={s.inlineCode}>/agents.json</code> configuration and start a
+                      session.
                     </div>
-                    <div style={s.connectStepArrow}>→</div>
-                    <div style={s.connectStep}>
-                      <div style={s.connectStepNum}>02</div>
-                      <div style={s.connectStepLabel}>Fetch agents.json</div>
+                    <div style={s.connectForm}>
+                      <input
+                        style={s.connectInput}
+                        type="text"
+                        placeholder="https://amd-act2-vue-neuclea.vercel.app"
+                        value={url}
+                        onChange={(e) => setUrl(e.target.value)}
+                        onKeyDown={(e) => e.key === 'Enter' && handleCheck()}
+                        autoFocus
+                      />
+                      <button
+                        style={{ ...s.discoverBtn, ...(checking ? { opacity: 0.7 } : null) }}
+                        onClick={handleCheck}
+                        disabled={checking}
+                      >
+                        {checking ? 'Discovering…' : 'Discover'}
+                      </button>
                     </div>
-                    <div style={s.connectStepArrow}>→</div>
-                    <div style={s.connectStep}>
-                      <div style={s.connectStepNum}>03</div>
-                      <div style={s.connectStepLabel}>Start chatting</div>
+                    {errorBanner && <div style={s.errorBanner}>{errorBanner}</div>}
+                    <div style={s.connectSteps}>
+                      <div style={s.connectStep}>
+                        <div style={s.connectStepNum}>01</div>
+                        <div style={s.connectStepLabel}>Enter site URL</div>
+                      </div>
+                      <div style={s.connectStepArrow}>→</div>
+                      <div style={s.connectStep}>
+                        <div style={s.connectStepNum}>02</div>
+                        <div style={s.connectStepLabel}>Fetch agents.json</div>
+                      </div>
+                      <div style={s.connectStepArrow}>→</div>
+                      <div style={s.connectStep}>
+                        <div style={s.connectStepNum}>03</div>
+                        <div style={s.connectStepLabel}>Start chatting</div>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -652,11 +665,46 @@ export default function App() {
                   <span style={s.footerBadge}>AMD Hackathon Act 2</span>
                 </div>
                 <div style={s.footerMembers}>
-                  <span style={s.footerMember}>Dawood (nurysso) </span>
-                  <span style={s.footerMember}>Ibrahim</span>
-                  <span style={s.footerMember}>Omair</span>
-                  <span style={s.footerMember}>Emaad</span>
-                  <span style={s.footerMember}>Mehran</span>
+                  <a
+                    href="https://dawood.page"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={s.footerMember}
+                  >
+                    Dawood (nurysso)
+                  </a>
+                  <a
+                    href="https://github.com/Ibrahim-Nazeer"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={s.footerMember}
+                  >
+                    Ibrahim
+                  </a>
+                  <a
+                    href="https://github.com/Omairdev"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={s.footerMember}
+                  >
+                    Omair
+                  </a>
+                  <a
+                    href="https://github.com/Emad-10"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={s.footerMember}
+                  >
+                    Emaad
+                  </a>
+                  <a
+                    href="https://github.com/Mehrxn"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={s.footerMember}
+                  >
+                    Mehran
+                  </a>
                 </div>
                 <div style={s.footerNote}>Proof of Concept for agents.json ecosystem</div>
               </div>
@@ -766,7 +814,7 @@ const s = {
     width: 32,
     height: 32,
     borderRadius: 8,
-    background: T.accent,
+    background: '#f0411ed4',
     color: '#fff',
     display: 'flex',
     alignItems: 'center',
@@ -822,12 +870,44 @@ const s = {
   },
   connectCard: {
     width: '100%',
-    maxWidth: 520,
     background: T.surface,
-    border: `1px solid ${T.border}`,
-    borderRadius: 16,
-    padding: 36,
-    boxShadow: '0 1px 0 rgba(0,0,0,0.02)',
+    borderRadius: '20px',
+    padding: 40,
+    position: 'relative',
+    border: '1px',
+    backgroundImage: `
+    linear-gradient(${T.surface}, ${T.surface}),
+    linear-gradient(135deg, ${T.accentDark} 0%, ${T.accent} 55%, ${T.accentDark} 90%, ${T.bg} 100%)
+  `,
+    backgroundOrigin: 'border-box',
+    backgroundClip: 'padding-box, border-box',
+    backgroundSize: '100% 100%, 180% 180%',
+    animation: 'gradientMove 8s ease-in-out infinite',
+    boxShadow: `
+    0 0 22px rgba(217, 74, 47, 0.18),
+    0 8px 32px rgba(217, 74, 47, 0.10)
+  `,
+  },
+  connectGradientBorder: {
+    padding: '1.5px',
+    borderRadius: '22px',
+    background: `linear-gradient(135deg, ${T.accentDark} 0%, ${T.accent} 50%, ${T.accentDark} 88%, ${T.bg} 100%)`,
+    backgroundSize: '180% 180%',
+    animation: 'gradientMove 8s ease-in-out infinite',
+    boxShadow: '100px 100px 308px rgba(217, 74, 47, 0.24), 0 0 60px rgba(217, 74, 47, 0.10)',
+    position: 'relative',
+    width: '100%',
+    maxWidth: 540,
+  },
+
+  connectGradientBorderHover: {
+    '&:hover': {
+      boxShadow: `
+      100px 100px 200px rgba(217, 74, 47, 0.32),
+      100px 100px 300px rgba(217, 74, 47, 0.18)
+    `,
+      transition: 'box-shadow 0.5s ease',
+    },
   },
   connectCardWrap: {
     flex: 1,
@@ -835,7 +915,7 @@ const s = {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    padding: '40px 0',
+    padding: '30px 0',
   },
   connectEyebrow: {
     fontSize: 11,
@@ -870,12 +950,20 @@ const s = {
   connectInput: {
     flex: 1,
     padding: '11px 14px',
-    border: `1px solid ${T.border}`,
+    border: '1px solid transparent',
     borderRadius: 8,
     fontSize: 14,
     background: '#fff',
     color: T.head,
     outline: 'none',
+    backgroundImage: `linear-gradient(#fff, #fff), linear-gradient(135deg, ${T.accentDark}, ${T.accent}, ${T.bg})`,
+    backgroundOrigin: 'border-box',
+    backgroundClip: 'padding-box, border-box',
+    backgroundSize: '100% 100%, 200% 200%',
+    transition: 'all 0.3s ease',
+    '&:focus': {
+      boxShadow: `0 0 0 4px rgba(217, 74, 47, 0.15)`,
+    },
   },
   discoverBtn: {
     padding: '11px 20px',
@@ -1369,6 +1457,17 @@ const globalCSS = `
     animation:blink .9s step-end infinite;
     border-radius:1px
   }
+    @keyframes gradientMove {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+@keyframes pulseGlow {
+  0% { opacity: 0.8; }
+  50% { opacity: 1; }
+  100% { opacity: 0.8; }
+}
 
   /* Streaming plain text (no markdown re-parse during streaming) */
   .agent-md-stream {
