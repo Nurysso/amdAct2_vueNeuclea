@@ -120,11 +120,12 @@ func (c *Client) CallTool(ctx context.Context, tool string, params map[string]in
 		switch s := v.(type) {
 		case string:
 			lower := strings.ToLower(strings.TrimSpace(s))
-			if lower == "true" {
+			switch lower {
+			case "true":
 				params[k] = true
-			} else if lower == "false" {
+			case "false":
 				params[k] = false
-			} else {
+			default:
 				params[k] = sanitizeStringParam(s)
 			}
 		}
