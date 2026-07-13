@@ -1,103 +1,238 @@
-# Neuclea
+# VisNeucla
 
-A WebSocket-based AI agent gateway that connects a chat frontend to any service exposing an [`agents.json`](https://amd-act2-vue-neuclea.vercel.app/agents.json) configuration and an MCP (Model Context Protocol) tool server.
+> **AMD Hackathon — Team Voyager**
+> _Point it at any REST API. Talk to it instantly._
 
----
+VisNeucla is a two-part system that turns any OpenAPI spec into a conversational AI agent in minutes — no boilerplate, no glue code.
 
-## How it works
-
-```
-Browser (React)
-    │  WebSocket
-    ▼
-Go Backend (neuclea)
-    ├── Agent loop  →  Fireworks LLM (planning + formatting)
-    └── MCP client  →  Your MCP server (tool execution)
-```
-
-1. The frontend fetches `/agents.json` from any website URL the user enters.
-2. It sends the config over WebSocket to the Go backend (`init` message).
-3. The backend registers the MCP endpoint, loads available tools, and pre-fetches categories.
-4. On each user query, a ReAct-style agent loop runs: the LLM decides which tool to call, the MCP client executes it, results feed back into the next planning step, and a final formatted response streams back to the browser.
+**Vis** generates a production-ready MCP server from an OpenAPI spec. **Neuclea** connects that server to a chat frontend through an agentic reasoning loop. Together they form a full pipeline from raw API to natural-language interface.
 
 ---
 
-## Project structure
+## The Pipeline
+
+```
+Your OpenAPI spec
+      │
+      ▼
+  ┌───────┐
+  │  Vis  │  generates a typed MCP server (TypeScript)
+  └───┬───┘
+      │  POST /mcp  (JSON-RPC 2.0)
+      ▼
+┌──────────┐
+│ Neuclea  │  ReAct agent loop  →  Fireworks LLM
+└────┬─────┘
+     │  WebSocket
+     ▼
+ Browser
+```
+
+1. Run `vis build ./openapi.yaml` — get a working MCP server.
+2. Deploy it and drop the URL into the Neuclea console.
+3. Start asking questions in plain English.
+
+---
+
+## Monorepo Structure
 
 ```
 .
-├── main.go               # HTTP server, CORS, graceful shutdown
-├── handlers/
-│   └── websocket.go      # WebSocket sessions, init/query/autocomplete handlers
-├── agent/
-│   └── agent.go          # ReAct agent loop (think → tool_call → final_answer)
-├── llm/
-│   └── client.go         # Fireworks / Ollama LLM client
-├── mcp/
-│   ├── client.go         # JSON-RPC MCP client with retry + backoff
-│   └── pool.go           # Per-endpoint client pool with rate limiting
-└── predictor/
-    └── predictor.go      # Markov-chain tool-sequence predictor
+├── neuclea/               # Go — WebSocket AI agent gateway
+│   ├── main.go
+│   ├── agent/agent.go     # ReAct loop: plan → call → summarise → format
+│   ├── llm/               # Fireworks / Ollama client + prompt engine
+│   ├── mcp/               # JSON-RPC MCP client pool with retry & rate limiting
+│   ├── handlers/          # WebSocket session management
+│   └── predictor/         # Markov-chain tool-sequence predictor
+│
+└── vis/                   # TypeScript — OpenAPI → MCP code generator
+    ├── packages/
+    │   ├── core/          # IR types (root, no deps)
+    │   ├── parser/        # OpenAPI 3.x → IR
+    │   ├── templates/     # IR → MCP server source
+    │   ├── generator/     # File system writer
+    │   └── cli/           # `vis` command
+    └── pnpm-workspace.yaml
 ```
 
 ---
 
-## Prerequisites
+## Neuclea — AI Agent Gateway
 
-- Go 1.22+
-- A Fireworks AI API key (or a local Ollama instance)
-- An MCP server exposing `POST /mcp` (JSON-RPC 2.0)
-- An `agents.json` reachable at `<your-site>/agents.json`
+A Go WebSocket server that runs a token-efficient ReAct agent loop against any MCP tool server.
 
----
+### Architecture
 
-## Environment variables
+The agent operates in rounds. Each round costs one LLM planning call; tools within a round run in parallel.
 
-| Variable            | Description             | Default                                            |
-| ------------------- | ----------------------- | -------------------------------------------------- |
-| `LLM_PROVIDER`      | `fireworks` or `ollama` | `fireworks`                                        |
-| `FIREWORKS_API_KEY` | Fireworks AI API key    | required if provider=fireworks                     |
-| `FIREWORKS_MODEL`   | Model ID to use         | `accounts/fireworks/models/llama-v3p1-8b-instruct` |
-| `OLLAMA_URL`        | Ollama base URL         | `http://localhost:11434`                           |
-| `OLLAMA_MODEL`      | Ollama model name       | `llama3`                                           |
-
-Copy `.env.example` to `.env` for local development:
-
-```env
-LLM_PROVIDER=fireworks
-FIREWORKS_API_KEY=your_key_here
+```
+Query arrives
+     │
+     ▼
+┌─────────────────────────────────────────────┐
+│  Round N (max 3)                            │
+│                                             │
+│  Plan  ──►  [tool_A]  ──►  summarise names │
+│             [tool_B]  ──►  summarise names │  ◄── parallel
+│             [tool_C]  ──►  summarise names │
+│                │                           │
+│                ▼                           │
+│         done=true?  ──Yes──► Format        │
+│                │                           │
+│               No                           │
+│                └────────────► Round N+1    │
+└─────────────────────────────────────────────┘
+     │
+     ▼
+ Natural language response  (5X less tokens usage when comapred to traditional agents)
 ```
 
----
+### Token Budget Design
 
-## Running locally
+Every architectural decision targets minimal token use:
+
+| Stage      | Technique                                               | Impact                |
+| ---------- | ------------------------------------------------------- | --------------------- |
+| Planning   | First-sentence tool descriptions only                   | −60% vs full desc     |
+| Planning   | Required params only in tool listing                    | −30% param tokens     |
+| History    | Name-only summaries (`4 items: Dune, Atomic Habits, …`) | −90% vs item previews |
+| Planning   | token cap on plan output                                | Enforced ceiling      |
+| Formatting | Description capped at first sentence per item           | −70% desc tokens      |
+| Formatting | Plain-text mode (no `response_format: json`)            | Correct prose output  |
+
+Typical total: **~1,800–2,200 tokens** per 2-round query.
+
+### Key Features
+
+- **Parallel tool calls** — independent tools in the same round run concurrently via goroutines
+- **Pre-fetching** — categories and other session-level data fetched once at init, seeded into agent history
+- **Graceful degradation** — plan errors and max-round hits both attempt a best-effort format from collected data before returning an error
+- **Markov predictor** — tracks tool-call sequences across queries to power autocomplete suggestions
+- **MCP pool** — per-endpoint rate limiting (1 req/s, burst 3), retries with exponential backoff, cold-start HTML detection
+
+### Running Neuclea
 
 ```bash
+cd neuclea
+cp .env.example .env          # add FIREWORKS_API_KEY
 go mod download
 go build -o neuclea .
-./neuclea
-# listening on :8080
+./neuclea                      # :8080
 ```
 
-The server exposes:
+| Endpoint         |                                  |
+| ---------------- | -------------------------------- |
+| `WS /ws`         | WebSocket gateway                |
+| `GET /health`    | Provider + timestamp             |
+| `GET /telemetry` | Session stats, predictor metrics |
 
-| Endpoint         | Description                          |
-| ---------------- | ------------------------------------ |
-| `GET /health`    | JSON health check with provider info |
-| `WS /ws`         | WebSocket gateway                    |
-| `GET /telemetry` | Session stats and predictor metrics  |
+### Environment
+
+| Variable            | Default                                  |
+| ------------------- | ---------------------------------------- |
+| `FIREWORKS_API_KEY` | required                                 |
+| `FIREWORKS_MODEL`   | `accounts/fireworks/models/minimax-m2p7` |
+| `LLM_PROVIDER`      | `fireworks` (`ollama` also supported)    |
+| `OLLAMA_URL`        | `http://localhost:11434`                 |
 
 ---
 
-## agents.json format
+## Vis — OpenAPI → MCP Generator
 
-The frontend fetches this from the target site. Minimum required fields:
+A TypeScript CLI that parses any OpenAPI 3.x spec and emits a complete, typed MCP server — Zod validation, error handling, JSON Schema tool discovery, and all.
+
+### Package Architecture
+
+```
+core  (IR types, no deps)
+  └── parser  (OpenAPI → IR)
+        └── templates  (IR → MCP source)
+              └── generator  (writes files)
+                    └── cli  (vis command)
+```
+
+Strict one-way dependency graph. No circular imports. `render()` functions are pure — same spec always produces identical output.
+
+### Quick Start
+
+```bash
+# Install
+npm install -g @vis/cli
+
+# Generate a server
+vis build ./openapi.yaml --out ./my-mcp-server
+
+# Build and run
+cd ./my-mcp-server && npm install && npm run build
+node dist/index.js
+```
+
+### What Gets Generated
+
+- Typed tool definitions with Zod schema validation
+- Automatic parameter routing (query, path, header, body)
+- Clean JSON Schema output for MCP tool discovery
+- Proper error handling and response formatting
+- Support for `allOf`, `oneOf`, `anyOf`, arrays, nested objects
+
+### CLI Reference
+
+```bash
+vis build <spec> [options]
+
+  <spec>                   Local file or URL (JSON or YAML)
+  -o, --out <dir>          Output directory  (default: ./mcp-server)
+  --base-url <url>         Override upstream API base URL
+  --package-name <name>    npm package name
+  --force                  Overwrite existing output directory
+  --no-install             Skip npm install
+  --typecheck              Run tsc --noEmit after install
+```
+
+### Development
+
+```bash
+cd vis
+pnpm install
+pnpm build:all
+pnpm test
+```
+
+---
+
+## WebSocket Protocol (Neuclea)
+
+### Client → Server
+
+```json
+{ "type": "init",  "payload": { /* agents.json */ } }
+{ "type": "query", "payload": { "query": "find me cameras under $500" } }
+{ "type": "ping" }
+```
+
+### Server → Client
+
+| Type               | When                                 |
+| ------------------ | ------------------------------------ |
+| `init`             | Session ready, tools loaded          |
+| `query.thought`    | Agent reasoning step (streamed live) |
+| `query.tool`       | Tool call completed                  |
+| `query.status`     | Status update                        |
+| `query`            | Final formatted answer               |
+| `session.sleeping` | Paused after idle timeout            |
+| `error`            | Any failure                          |
+
+---
+
+## agents.json Format
+
+The frontend fetches this from the target site and sends it as the `init` payload.
 
 ```json
 {
   "schema_version": "1.1",
-  "name": "My API Agent",
-  "description": "What this agent does.",
+  "name": "My Store Agent",
   "mcp_server_url": "https://your-mcp-server.example.com",
   "tools": [
     {
@@ -106,9 +241,9 @@ The frontend fetches this from the target site. Minimum required fields:
       "input_schema": {
         "type": "object",
         "properties": {
-          "category": { "type": "string", "description": "Product category" },
-          "page": { "type": "integer", "description": "Page number" },
-          "limit": { "type": "integer", "description": "Results per page" }
+          "category": { "type": "string" },
+          "page": { "type": "integer" },
+          "limit": { "type": "integer" }
         }
       }
     }
@@ -116,111 +251,23 @@ The frontend fetches this from the target site. Minimum required fields:
 }
 ```
 
-The `mcp_server_url` must point to a server accepting `POST /mcp` with JSON-RPC 2.0 `tools/call` requests.
+---
+
+## Built With
+
+- **Go 1.25** — Neuclea agent, WebSocket server, MCP client (need 1.25 to use x/time package for rate limit fix )
+- **TypeScript** — Vis generator, MCP server templates
+- **Fireworks AI** — LLM inference (MiniMax M2P7 / GLM series)
+- **Model Context Protocol** — Tool execution standard
+- **gorilla/websocket** — WebSocket transport
+- **Zod** — Runtime schema validation in generated servers
+- **pnpm workspaces** — Vis monorepo
 
 ---
 
-## WebSocket protocol
+## Team Voyager · AMD Hackathon
 
-All messages are JSON with a `type` field.
+> Vis — _Latin for "force, power, strength"_
+> Neuclea — _the nucleus, the core_
 
-### Client → Server
-
-**Initialize a session:**
-
-```json
-{
-  "type": "init",
-  "payload": {
-    /* full agents.json object */
-  }
-}
-```
-
-**Send a query:**
-
-```json
-{
-  "type": "query",
-  "payload": { "query": "Show me cameras under $500" }
-}
-```
-
-**Ping:**
-
-```json
-{ "type": "ping" }
-```
-
-### Server → Client
-
-| Type               | When                                  |
-| ------------------ | ------------------------------------- |
-| `init`             | Session initialized, tools loaded     |
-| `query.status`     | Status update during agent execution  |
-| `query.thought`    | Agent reasoning step (streamed)       |
-| `query.tool`       | Tool call result                      |
-| `query.chunk`      | Streamed text chunk of final response |
-| `query`            | Final response (complete)             |
-| `session.sleeping` | Session paused after idle timeout     |
-| `session.resumed`  | Session resumed after activity        |
-| `pong`             | Response to ping                      |
-| `error`            | Error on any message                  |
-
----
-
-## MCP client behaviour
-
-- **Retries:** up to 3 attempts with exponential backoff (5s → 10s → 20s + jitter) on HTTP 429.
-- **Rate limiting:** 1 req/sec per endpoint, burst of 3, enforced in the pool before hitting the server.
-- **Cold start guard:** HTML responses (Render free tier wake-up pages) are detected via `Content-Type` and surfaced as a clear error instead of a JSON parse failure.
-
----
-
-## Agent loop
-
-The agent runs a maximum of 5 ReAct steps per query:
-
-1. **Think** — LLM receives the query, tool schemas, and all previous tool results, then outputs a JSON plan (`tool_call` or `final_answer`).
-2. **Act** — The chosen tool is called via the MCP client.
-3. **Observe** — The result (or error) is appended to state and fed into the next think step.
-4. **Terminate early** if: the same tool fails 3 times in a row, any tool is called more than 3 times, or the MCP server returns a rate-limit error.
-
-After execution, the raw tool results are passed to a second LLM call (`FormatResponse`) that produces the final user-facing markdown response, streamed chunk by chunk.
-
----
-
-### CORS
-
-The backend allows `https://neuclea-console.vercel.app` by default. To add origins, edit `withCORS` in `main.go`:
-
-```go
-allowed := map[string]bool{
-    "https://neuclea-console.vercel.app": true,
-    "https://your-other-origin.com":      true,
-}
-```
-
----
-
-## Telemetry
-
-`GET /telemetry` returns a snapshot of all active sessions and aggregate stats:
-
-```json
-{
-  "session_count": 1,
-  "initialized_sessions": 1,
-  "aggregate": {
-    "total_queries": 12,
-    "avg_response_ms": 3400,
-    "prediction_accuracy": 0.75
-  },
-  "predictor": {
-    "transitions_recorded": 48,
-    "unique_from_tools": 3
-  }
-}
-```
-
-The predictor tracks tool call sequences using a Markov chain and uses them to power autocomplete suggestions in the frontend.
+## [License](#license) Apache License V2
