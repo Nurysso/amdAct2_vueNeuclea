@@ -66,6 +66,7 @@ type session struct {
 	categories  []string
 	endpoint    string
 	sleeping    bool
+	prefetched  map[string]interface{}
 }
 
 type Handler struct {
@@ -108,6 +109,7 @@ func (h *Handler) HandleWS(w http.ResponseWriter, r *http.Request) {
 		tools:      map[string]Tool{},
 		lastActive: time.Now(),
 		telemetry:  Telemetry{ToolsUsed: []string{}},
+		prefetched: map[string]interface{}{},
 	}
 	h.register(s)
 	log.Printf("[%s] session %s connected", time.Now().Format(time.RFC3339), s.id)
@@ -242,32 +244,6 @@ func (h *Handler) handleInit(s *session, msg WSMessage, raw []byte) {
 		time.Now().Format(time.RFC3339), s.id, len(tools), endpoint, healthErr == nil)
 }
 
-func (h *Handler) fetchCategories(s *session) {
-	s.mu.Lock()
-	_, hasTool := s.tools["list_categories_api_categories_get"]
-	endpoint := s.endpoint
-	s.mu.Unlock()
-	if !hasTool {
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	result, err := h.Pool.CallTool(ctx, endpoint, "list_categories_api_categories_get", map[string]interface{}{})
-	if err != nil {
-		log.Printf("[%s] fetchCategories failed: %v", time.Now().Format(time.RFC3339), err)
-		return
-	}
-	// result is typically {"data": ["Electronics", "Clothing", ...]}
-	cats := extractCategoryList(result)
-	if len(cats) == 0 {
-		return
-	}
-	s.mu.Lock()
-	s.categories = cats
-	s.mu.Unlock()
-	log.Printf("[%s] session %s loaded %d categories", time.Now().Format(time.RFC3339), s.id, len(cats))
-}
-
 func extractCategoryList(result interface{}) []string {
 	m, ok := result.(map[string]interface{})
 	if !ok {
@@ -323,11 +299,18 @@ func findSimilarTool(name string, tools map[string]Tool) string {
 
 func (h *Handler) handleQuery(s *session, msg WSMessage) {
 	start := time.Now()
+
 	s.mu.Lock()
 	initialized := s.initialized
 	tools := s.tools
 	endpoint := s.endpoint
+	// snapshot prefetched under lock — copy so agent can read without holding the lock
+	prefetched := make(map[string]interface{}, len(s.prefetched))
+	for k, v := range s.prefetched {
+		prefetched[k] = v
+	}
 	s.mu.Unlock()
+
 	if !initialized {
 		h.send(s, ServerResponse{Type: "query", ID: msg.ID, OK: false, Error: "session not initialized"})
 		return
@@ -336,11 +319,13 @@ func (h *Handler) handleQuery(s *session, msg WSMessage) {
 		h.send(s, ServerResponse{Type: "query", ID: msg.ID, OK: false, Error: "MCP endpoint not configured"})
 		return
 	}
+
 	var p QueryPayload
 	if err := json.Unmarshal(msg.Payload, &p); err != nil || strings.TrimSpace(p.Query) == "" {
 		h.send(s, ServerResponse{Type: "query", ID: msg.ID, OK: false, Error: "missing query"})
 		return
 	}
+
 	llmTools := make([]llm.Tool, 0, len(tools))
 	for _, t := range tools {
 		params := make(map[string]string, len(t.InputSchema.Properties))
@@ -367,11 +352,10 @@ func (h *Handler) handleQuery(s *session, msg WSMessage) {
 		},
 	})
 
-	// Create a channel for thoughts
-	thoughtChan := make(chan string, 10)
+	// Each query gets its own thought channel so concurrent queries don't mix
+	thoughtChan := make(chan string, 20)
 	h.Agent.ThoughtChain = thoughtChan
 
-	// Start a goroutine to forward thoughts
 	go func() {
 		for thought := range thoughtChan {
 			h.send(s, ServerResponse{
@@ -389,20 +373,29 @@ func (h *Handler) handleQuery(s *session, msg WSMessage) {
 	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 	defer cancel()
 
-	agentResponse, err := h.Agent.Execute(ctx, p.Query, llmTools, endpoint)
-
-	// Close the thought channel after execution
-	close(thoughtChan)
+	agentResponse, err := h.Agent.Execute(ctx, p.Query, llmTools, endpoint, prefetched)
+	close(thoughtChan) // close once, not twice
 
 	if err != nil {
+		log.Printf("[%s] session %s agent error: %v", time.Now().Format(time.RFC3339), s.id, err)
 		h.send(s, ServerResponse{Type: "query", ID: msg.ID, OK: false, Error: err.Error()})
 		return
 	}
 	if agentResponse.Error != "" {
+		log.Printf("[%s] session %s agent response error: %s", time.Now().Format(time.RFC3339), s.id, agentResponse.Error)
 		h.send(s, ServerResponse{Type: "query", ID: msg.ID, OK: false, Error: agentResponse.Error})
 		return
 	}
+
+	// Send tool events — skip prefetched ones since user didn't see those "called" live
 	for _, exec := range agentResponse.ToolCalls {
+		if _, wasPrefetched := prefetched[exec.Tool]; wasPrefetched {
+			continue // don't surface init-time fetches as query tool calls
+		}
+		status := fmt.Sprintf("✅ Tool '%s' executed successfully", exec.Tool)
+		if !exec.Success {
+			status = fmt.Sprintf("⚠️ Tool '%s' failed: %s", exec.Tool, exec.Error)
+		}
 		h.send(s, ServerResponse{
 			Type: "query.tool",
 			ID:   msg.ID,
@@ -412,109 +405,47 @@ func (h *Handler) handleQuery(s *session, msg WSMessage) {
 				"parameters": exec.Parameters,
 				"success":    exec.Success,
 				"error":      exec.Error,
-				"result":     exec.Result,
 			},
 		})
-		if !exec.Success {
-			h.send(s, ServerResponse{
-				Type: "query.status",
-				ID:   msg.ID,
-				OK:   true,
-				Payload: map[string]interface{}{
-					"message": fmt.Sprintf("⚠️ Tool '%s' failed: %s", exec.Tool, exec.Error),
-				},
-			})
-		} else {
-			h.send(s, ServerResponse{
-				Type: "query.status",
-				ID:   msg.ID,
-				OK:   true,
-				Payload: map[string]interface{}{
-					"message": fmt.Sprintf("✅ Tool '%s' executed successfully", exec.Tool),
-				},
-			})
+		h.send(s, ServerResponse{
+			Type:    "query.status",
+			ID:      msg.ID,
+			OK:      true,
+			Payload: map[string]interface{}{"message": status},
+		})
+	}
+
+	// Final answer — agent already formatted it, send directly
+	text := agentResponse.Message
+	if text == "" {
+		text = "I couldn't find any results for your query."
+	}
+	h.send(s, ServerResponse{
+		Type:    "query",
+		ID:      msg.ID,
+		OK:      true,
+		Payload: map[string]string{"text": text},
+	})
+
+	// Update predictor with tool sequence from this query
+	prev := "__query__"
+	for _, exec := range agentResponse.ToolCalls {
+		if exec.Success {
+			h.Predictor.Record(prev, exec.Tool)
+			prev = exec.Tool
 		}
 	}
-	if agentResponse.Final {
-		if agentResponse.Message != "" {
-			streamCb := func(chunk string) {
-				h.send(s, ServerResponse{
-					Type:    "query.chunk",
-					ID:      msg.ID,
-					OK:      true,
-					Payload: map[string]string{"text": chunk},
-				})
-			}
-			formatted, err := h.LLM.FormatResponse(ctx, p.Query, agentResponse.Message, streamCb)
-			if err != nil {
-				h.send(s, ServerResponse{
-					Type: "query",
-					ID:   msg.ID,
-					OK:   true,
-					Payload: map[string]string{
-						"text": agentResponse.Message,
-					},
-				})
-			} else {
-				h.send(s, ServerResponse{
-					Type: "query",
-					ID:   msg.ID,
-					OK:   true,
-					Payload: map[string]string{
-						"text": formatted,
-					},
-				})
-			}
-		} else if len(agentResponse.ToolCalls) > 0 {
-			var resultMsg strings.Builder
-			resultMsg.WriteString("Here's what I found:\n\n")
-			for _, exec := range agentResponse.ToolCalls {
-				if exec.Success && exec.Result != nil {
-					if resultMap, ok := exec.Result.(map[string]interface{}); ok {
-						if data, ok := resultMap["data"]; ok {
-							if dataSlice, ok := data.([]interface{}); ok {
-								for _, item := range dataSlice {
-									if product, ok := item.(map[string]interface{}); ok {
-										name, _ := product["name"].(string)
-										price, _ := product["price"].(float64)
-										resultMsg.WriteString(fmt.Sprintf("• %s: $%.2f\n", name, price))
-									}
-								}
-								continue
-							}
-						}
-					}
-					// Fallback to raw result
-					resultMsg.WriteString(fmt.Sprintf("• %s result: %v\n", exec.Tool, exec.Result))
-				}
-			}
-			h.send(s, ServerResponse{
-				Type: "query",
-				ID:   msg.ID,
-				OK:   true,
-				Payload: map[string]string{
-					"text": resultMsg.String(),
-				},
-			})
-		} else {
-			h.send(s, ServerResponse{
-				Type: "query",
-				ID:   msg.ID,
-				OK:   true,
-				Payload: map[string]string{
-					"text": "I couldn't find any results for your query.",
-				},
-			})
-		}
-	}
+
 	s.mu.Lock()
 	s.telemetry.QueryCount++
 	elapsed := time.Since(start).Milliseconds()
 	s.telemetry.TotalResponseMS += elapsed
 	s.lastActive = time.Now()
 	s.mu.Unlock()
-	log.Printf("[%s] session %s query completed in %dms with %d tool calls",
-		time.Now().Format(time.RFC3339), s.id, elapsed, len(agentResponse.ToolCalls))
+
+	log.Printf("[%s] session %s query completed in %dms with %d tool calls (tokens=%d)",
+		time.Now().Format(time.RFC3339), s.id, elapsed,
+		len(agentResponse.ToolCalls), agentResponse.TotalTokens)
 }
 
 func (s *session) extractCategory(query string) string {
@@ -529,6 +460,47 @@ func (s *session) extractCategory(query string) string {
 	}
 	return ""
 }
+
+func (h *Handler) fetchCategories(s *session) {
+	s.mu.Lock()
+	endpoint := s.endpoint
+	// find any tool whose name contains "categor" — dynamic, not hardcoded
+	categoryTool := ""
+	for name := range s.tools {
+		if strings.Contains(strings.ToLower(name), "categor") {
+			categoryTool = name
+			break
+		}
+	}
+	s.mu.Unlock()
+
+	if categoryTool == "" {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	result, err := h.Pool.CallTool(ctx, endpoint, categoryTool, map[string]interface{}{})
+	if err != nil {
+		log.Printf("[%s] fetchCategories failed: %v", time.Now().Format(time.RFC3339), err)
+		return
+	}
+
+	cats := extractCategoryList(result)
+
+	s.mu.Lock()
+	s.categories = cats
+	if result != nil {
+		s.prefetched[categoryTool] = result
+	}
+	s.mu.Unlock()
+
+	h.Predictor.Record("__init__", categoryTool)
+	log.Printf("[%s] session %s prefetched %q (%d categories)",
+		time.Now().Format(time.RFC3339), s.id, categoryTool, len(cats))
+}
+
 func extractCategoryFromQuery(query string) string {
 	lower := strings.ToLower(query)
 	categories := []string{"Electronics", "Clothing", "Books", "Home & Garden"}

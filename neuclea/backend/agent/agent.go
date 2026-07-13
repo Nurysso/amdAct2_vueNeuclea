@@ -8,21 +8,9 @@ import (
 	"neuclea/llm"
 	"neuclea/mcp"
 	"strings"
+	"sync"
 	"time"
 )
-
-type AgentState struct {
-	Query         string          `json:"query"`
-	Tools         []llm.Tool      `json:"tools"`
-	ToolHistory   []ToolExecution `json:"tool_history"`
-	CurrentStep   int             `json:"current_step"`
-	MaxSteps      int             `json:"max_steps"`
-	Completed     bool            `json:"completed"`
-	FinalResponse string          `json:"final_response"`
-	Error         string          `json:"error"`
-	Endpoint      string          `json:"endpoint"`
-	TotalTokens   int             `json:"total_tokens"`
-}
 
 type ToolExecution struct {
 	Tool          string                 `json:"tool"`
@@ -40,15 +28,13 @@ type AgentResponse struct {
 	ToolCalls   []ToolExecution `json:"tool_calls,omitempty"`
 	Error       string          `json:"error,omitempty"`
 	Thought     string          `json:"thought"`
-	Confidence  float64         `json:"confidence"`
 	TotalTokens int             `json:"total_tokens"`
 }
 
 type Agent struct {
 	LLM          *llm.Client
 	Pool         *mcp.Pool
-	MaxSteps     int
-	Debug        bool
+	MaxRounds    int
 	ThoughtChain chan string
 	logger       *slog.Logger
 }
@@ -57,9 +43,8 @@ func NewAgent(llmClient *llm.Client, pool *mcp.Pool) *Agent {
 	return &Agent{
 		LLM:          llmClient,
 		Pool:         pool,
-		MaxSteps:     5,
-		Debug:        true,
-		ThoughtChain: make(chan string, 10),
+		MaxRounds:    3,
+		ThoughtChain: make(chan string, 20),
 		logger:       slog.Default(),
 	}
 }
@@ -69,25 +54,372 @@ func (a *Agent) WithLogger(l *slog.Logger) *Agent {
 	return a
 }
 
-func summariseResult(tool string, result interface{}) string {
+func (a *Agent) sendThought(t string) {
+	if a.ThoughtChain == nil {
+		return
+	}
+	select {
+	case a.ThoughtChain <- t:
+	default:
+	}
+}
+
+// Execute runs the parallel tool-selection loop.
+// prefetched contains results already fetched at session init (e.g. categories).
+
+func (a *Agent) Execute(
+	ctx context.Context,
+	query string,
+	tools []llm.Tool,
+	endpoint string,
+	prefetched map[string]interface{},
+) (*AgentResponse, error) {
+	totalTokens := 0
+	var history []ToolExecution // full results, stored agent-side
+
+	// Seed from prefetched
+	for toolName, result := range prefetched {
+		history = append(history, ToolExecution{
+			Tool:          toolName,
+			Parameters:    map[string]interface{}{},
+			Result:        result,
+			ResultSummary: summariseResult(toolName, result),
+			Success:       true,
+			Timestamp:     time.Now(),
+		})
+		a.logger.Info("agent.prefetch_seeded", "tool", toolName)
+	}
+
+	a.logger.Info("agent.start", "query", query, "prefetched", len(prefetched))
+
+	for round := 0; round < a.MaxRounds; round++ {
+		a.sendThought(fmt.Sprintf("🔄 Round %d/%d", round+1, a.MaxRounds))
+
+		select {
+		case <-ctx.Done():
+			return &AgentResponse{
+				Final: true, Error: "cancelled",
+				ToolCalls: history, TotalTokens: totalTokens,
+			}, nil
+		default:
+		}
+
+		// Build compact history for LLM — summaries only, no raw results
+		llmHistory := make([]llm.HistoryEntry, len(history))
+		for i, h := range history {
+			llmHistory[i] = llm.HistoryEntry{
+				Tool:    h.Tool,
+				Summary: h.ResultSummary,
+				Success: h.Success,
+				Error:   h.Error,
+			}
+		}
+
+		plan, tokens, err := a.LLM.PlanToolCallsH(ctx, query, tools, llmHistory)
+		totalTokens += tokens
+		if err != nil {
+			a.logger.Error("agent.plan_error", "round", round+1, "error", err)
+			// Plan failed — try to format from whatever data we have so far
+			// rather than propagating a hard error to the user.
+			if len(history) > 0 {
+				a.sendThought("⚠️ Planning error — formatting from collected data")
+				displayData := buildDisplayData(history)
+				if len(displayData) > 0 {
+					msg, fmtTokens, fmtErr := a.LLM.FormatResponseWithUsage(ctx, query, displayData)
+					totalTokens += fmtTokens
+					if fmtErr == nil && msg != "" {
+						return &AgentResponse{
+							Final:       true,
+							Message:     msg,
+							ToolCalls:   history,
+							TotalTokens: totalTokens,
+						}, nil
+					}
+				}
+			}
+			return nil, fmt.Errorf("round %d plan: %w", round, err)
+		}
+
+		a.logger.Info("agent.plan",
+			"round", round+1,
+			"done", plan.Done,
+			"tools", len(plan.Calls),
+			"tokens", tokens,
+			"session_tokens", totalTokens,
+		)
+		a.sendThought(fmt.Sprintf("💭 %s", plan.Thought))
+
+		if plan.Done {
+			a.sendThought("✅ Formatting answer")
+
+			// Build display-ready data: extract only the fields the LLM needs to
+			// write a natural reply (name, price, rating, description). Avoids
+			// double-encoding summaries and keeps fmt_tokens low.
+			displayData := buildDisplayData(history)
+
+			msg, fmtTokens, fmtErr := a.LLM.FormatResponseWithUsage(ctx, query, displayData)
+			totalTokens += fmtTokens
+			if fmtErr != nil || msg == "" {
+				msg = plan.Thought
+			}
+
+			a.logger.Info("agent.done",
+				"rounds", round+1,
+				"fmt_tokens", fmtTokens,
+				"total_tokens", totalTokens,
+			)
+			return &AgentResponse{
+				Final:       true,
+				Message:     msg,
+				ToolCalls:   history,
+				Thought:     plan.Thought,
+				TotalTokens: totalTokens,
+			}, nil
+		}
+
+		if len(plan.Calls) == 0 {
+			break
+		}
+
+		a.sendThought(fmt.Sprintf("⚡ Calling %d tool(s)", len(plan.Calls)))
+		executions := a.executeParallel(ctx, endpoint, plan.Calls)
+		history = append(history, executions...)
+	}
+
+	a.logger.Warn("agent.max_rounds", "total_tokens", totalTokens)
+
+	// Still have data — try to format a best-effort answer rather than erroring.
+	displayData := buildDisplayData(history)
+	if len(displayData) > 0 {
+		a.sendThought("⚠️ Max rounds reached — formatting best-effort answer")
+		msg, fmtTokens, fmtErr := a.LLM.FormatResponseWithUsage(ctx, query, displayData)
+		totalTokens += fmtTokens
+		if fmtErr == nil && msg != "" {
+			a.logger.Info("agent.max_rounds_formatted", "fmt_tokens", fmtTokens, "total_tokens", totalTokens)
+			return &AgentResponse{
+				Final:       true,
+				Message:     msg,
+				ToolCalls:   history,
+				TotalTokens: totalTokens,
+			}, nil
+		}
+	}
+	return &AgentResponse{
+		Final: true, Error: "max rounds reached without a conclusive answer",
+		ToolCalls: history, TotalTokens: totalTokens,
+	}, nil
+}
+
+// executeParallel runs all tool calls concurrently and returns results in order.
+func (a *Agent) executeParallel(ctx context.Context, endpoint string, calls []llm.ToolCall) []ToolExecution {
+	results := make([]ToolExecution, len(calls))
+	var wg sync.WaitGroup
+
+	for i, call := range calls {
+		wg.Add(1)
+		go func(idx int, tc llm.ToolCall) {
+			defer wg.Done()
+
+			// Show params in thought so user sees "list_products(category=Books)"
+			paramStr := ""
+			for k, v := range tc.Parameters {
+				if paramStr != "" {
+					paramStr += ", "
+				}
+				paramStr += fmt.Sprintf("%s=%v", k, v)
+			}
+			label := tc.Tool
+			if paramStr != "" {
+				label = fmt.Sprintf("%s(%s)", tc.Tool, paramStr)
+			}
+			a.sendThought(fmt.Sprintf("📞 %s", label))
+
+			ex := ToolExecution{
+				Tool:       tc.Tool,
+				Parameters: tc.Parameters,
+				Timestamp:  time.Now(),
+			}
+
+			client := a.Pool.Get(endpoint)
+			if client == nil {
+				ex.Error = "mcp client not found for endpoint: " + endpoint
+				results[idx] = ex
+				return
+			}
+
+			if tc.Parameters == nil {
+				tc.Parameters = map[string]interface{}{}
+			}
+
+			result, err := client.CallTool(ctx, tc.Tool, tc.Parameters)
+			if err != nil {
+				ex.Error = err.Error()
+				a.sendThought(fmt.Sprintf("❌ %s failed: %s", label, err.Error()))
+			} else {
+				ex.Result = result
+				ex.ResultSummary = summariseResult(tc.Tool, result)
+				ex.Success = true
+				a.sendThought(fmt.Sprintf("✅ %s", label))
+			}
+			results[idx] = ex
+		}(i, call)
+	}
+
+	wg.Wait()
+	return results
+}
+
+// displayFields are the only keys forwarded to the LLM for final formatting.
+// Keeping this list tight is the single biggest lever on fmt_tokens.
+var displayFields = []string{"name", "title", "price", "rating", "description", "category", "stock", "id", "slug"}
+
+// buildDisplayData converts successful tool results into a slim, display-ready
+// structure. Multiple calls to the same tool are merged so no results are
+// silently overwritten (e.g. 4x list_products across different categories).
+func buildDisplayData(history []ToolExecution) map[string]interface{} {
+	type accum struct {
+		items []interface{}
+		total int
+	}
+	acc := make(map[string]*accum)
+	order := make([]string, 0, len(history))
+
+	for _, h := range history {
+		if !h.Success || h.Result == nil {
+			continue
+		}
+		if _, seen := acc[h.Tool]; !seen {
+			acc[h.Tool] = &accum{}
+			order = append(order, h.Tool)
+		}
+		a := acc[h.Tool]
+		slim := slimResult(h.Result)
+		// If slimResult returned a keyed list, merge its items.
+		if m, ok := slim.(map[string]interface{}); ok {
+			merged := false
+			for _, key := range []string{"data", "items", "results", "products", "categories"} {
+				if raw, ok := m[key]; ok {
+					if slice, ok := raw.([]interface{}); ok {
+						a.items = append(a.items, slice...)
+						if t, ok := m["total"]; ok {
+							if n, ok := t.(float64); ok {
+								a.total += int(n)
+							}
+						}
+						merged = true
+						break
+					}
+				}
+			}
+			if !merged {
+				a.items = append(a.items, slim)
+			}
+		} else {
+			a.items = append(a.items, slim)
+		}
+	}
+
+	out := make(map[string]interface{}, len(order))
+	for _, tool := range order {
+		a := acc[tool]
+		if len(a.items) == 1 {
+			out[tool] = a.items[0]
+		} else {
+			total := a.total
+			if total == 0 {
+				total = len(a.items)
+			}
+			out[tool] = map[string]interface{}{
+				"items": a.items,
+				"total": total,
+			}
+		}
+	}
+	return out
+}
+
+// slimResult strips a raw tool result down to display-relevant fields only.
+func slimResult(result interface{}) interface{} {
+	m, ok := result.(map[string]interface{})
+	if !ok {
+		return result
+	}
+	// If the result has a list key, slim each item in the list.
+	for _, key := range []string{"data", "items", "results", "products", "categories"} {
+		if raw, ok := m[key]; ok {
+			if slice, ok := raw.([]interface{}); ok {
+				limit := 10
+				if len(slice) < limit {
+					limit = len(slice)
+				}
+				slimmed := make([]interface{}, limit)
+				for i, item := range slice[:limit] {
+					slimmed[i] = slimItem(item)
+				}
+				out := map[string]interface{}{key: slimmed}
+				if total, ok := m["total"]; ok {
+					out["total"] = total
+				}
+				return out
+			}
+			// scalar value (e.g. categories as a plain []string)
+			return raw
+		}
+	}
+	// Flat object — slim it directly.
+	return slimItem(m)
+}
+
+// slimItem keeps only displayFields from a map.
+// Descriptions are capped at 120 chars — the formatter only needs a one-liner
+// to write a natural reply; the full paragraph wastes tokens.
+func slimItem(item interface{}) interface{} {
+	m, ok := item.(map[string]interface{})
+	if !ok {
+		return item
+	}
+	out := make(map[string]interface{}, len(displayFields))
+	for _, f := range displayFields {
+		v, ok := m[f]
+		if !ok {
+			continue
+		}
+		if f == "description" {
+			if s, ok := v.(string); ok && len(s) > 120 {
+				// Keep first sentence or first 120 chars.
+				if dot := strings.IndexAny(s, ".!?"); dot > 0 && dot < 120 {
+					v = s[:dot+1]
+				} else {
+					v = s[:120] + "…"
+				}
+			}
+		}
+		out[f] = v
+	}
+	return out
+}
+
+// summariseResult produces a planner-readable summary of a tool result.
+// It extracts ALL item names so the planner can reason about content
+// (e.g. decide "Dune is in this list, I have enough data → done=true").
+// Format: {"data":[{"name":"A"},{"name":"B"},…],"total":N}
+// Only the name field is kept — descriptions/prices stay out of the planner.
+func summariseResult(_ string, result interface{}) string {
 	if result == nil {
 		return "(empty)"
 	}
-
-	b, err := json.Marshal(result)
-	if err != nil {
-		return "(unserializable)"
-	}
-
-	if len(b) <= 400 {
-		return string(b)
-	}
-
 	m, ok := result.(map[string]interface{})
 	if !ok {
-		return string(b[:400]) + "... (truncated)"
+		// Flat value (e.g. scalar string, raw array) — marshal as-is if small.
+		b, err := json.Marshal(result)
+		if err != nil {
+			return "(unserializable)"
+		}
+		if len(b) <= 300 {
+			return string(b)
+		}
+		return string(b[:300]) + "…"
 	}
-
 	for _, key := range []string{"data", "items", "results", "products", "categories"} {
 		raw, ok := m[key]
 		if !ok {
@@ -97,466 +429,36 @@ func summariseResult(tool string, result interface{}) string {
 		if !ok {
 			continue
 		}
-
-		total := len(slice)
-		preview := slice
-		if total > 6 {
-			preview = slice[:6]
-		}
-
-		pb, _ := json.Marshal(preview)
-
-		meta := map[string]interface{}{
-			key:     json.RawMessage(pb),
-			"shown": len(preview),
-			"total": total,
-		}
-		if apiTotal, ok := m["total"]; ok {
-			meta["total"] = apiTotal
-		}
-		if tool != "" {
-			meta["_tool"] = tool
-		}
-
-		out, err := json.Marshal(meta)
-		if err != nil {
-			return string(pb)
-		}
-		return string(out)
-	}
-
-	return string(b[:400]) + "... (truncated, use tool=" + tool + " for full data)"
-}
-
-func (a *Agent) Execute(ctx context.Context, query string, tools []llm.Tool, endpoint string) (*AgentResponse, error) {
-	state := &AgentState{
-		Query:       query,
-		Tools:       tools,
-		ToolHistory: []ToolExecution{},
-		MaxSteps:    a.MaxSteps,
-		Endpoint:    endpoint,
-	}
-	toolCallCount := make(map[string]int)
-
-	a.logger.Info("agent.start", "query", query, "max_steps", a.MaxSteps)
-
-	for !state.Completed && state.CurrentStep < state.MaxSteps {
-		state.CurrentStep++
-		a.sendThought(fmt.Sprintf("🔄 Step %d/%d", state.CurrentStep, state.MaxSteps))
-
-		select {
-		case <-ctx.Done():
-			return &AgentResponse{
-				Final:       true,
-				Error:       "Context cancelled: " + ctx.Err().Error(),
-				Thought:     "Task cancelled",
-				ToolCalls:   state.ToolHistory,
-				TotalTokens: state.TotalTokens,
-			}, nil
-		default:
-		}
-
-		plan, stepTokens, err := a.think(ctx, state)
-		if err != nil {
-			return nil, fmt.Errorf("planning failed: %w", err)
-		}
-
-		state.TotalTokens += stepTokens
-		a.logger.Info("agent.step",
-			"step", state.CurrentStep,
-			"action", plan.Action,
-			"tool", plan.Tool,
-			"step_tokens", stepTokens,
-			"session_tokens", state.TotalTokens,
-		)
-
-		a.sendThought(fmt.Sprintf("Thought %s", plan.Thought))
-
-		if plan.Action == "final_answer" {
-			state.Completed = true
-
-			lastResult := lastSuccessfulSummary(state.ToolHistory)
-			var formatted string
-			var fmtTokens int
-			if lastResult != nil {
-				formatted, fmtTokens, err = a.LLM.FormatResponseWithUsage(ctx, query, lastResult)
-				if err != nil {
-					formatted = plan.Thought
+		// Extract name-only objects for every item — keeps the summary small
+		// but gives the planner the full name list to reason about.
+		nameOnly := make([]map[string]string, 0, len(slice))
+		for _, item := range slice {
+			im, ok := item.(map[string]interface{})
+			if !ok {
+				if s, ok := item.(string); ok {
+					nameOnly = append(nameOnly, map[string]string{"name": s})
 				}
-			} else {
-				formatted = plan.Thought
-			}
-
-			state.TotalTokens += fmtTokens
-			a.logger.Info("agent.format",
-				"format_tokens", fmtTokens,
-				"session_tokens", state.TotalTokens,
-			)
-			a.logger.Info("agent.done",
-				"steps", state.CurrentStep,
-				"total_tokens", state.TotalTokens,
-				"query", query,
-			)
-
-			return &AgentResponse{
-				Final:       true,
-				Message:     formatted,
-				ToolCalls:   state.ToolHistory,
-				Thought:     plan.Thought,
-				Confidence:  0.95,
-				TotalTokens: state.TotalTokens,
-			}, nil
-		}
-
-		if plan.Action == "tool_call" {
-			toolCallCount[plan.Tool]++
-			if toolCallCount[plan.Tool] > 2 {
-				a.sendThought(fmt.Sprintf("⚠️ Too many calls to %s", plan.Tool))
-				a.logger.Warn("agent.tool_loop",
-					"tool", plan.Tool,
-					"count", toolCallCount[plan.Tool],
-					"session_tokens", state.TotalTokens,
-				)
-				resultMsg := a.formatToolResults(state.ToolHistory)
-				msg := fmt.Sprintf("Tried %s multiple times.", plan.Tool)
-				if resultMsg != "" {
-					msg = resultMsg
-				}
-				return &AgentResponse{
-					Final:       true,
-					Message:     msg,
-					ToolCalls:   state.ToolHistory,
-					Thought:     "Completed after multiple attempts",
-					TotalTokens: state.TotalTokens,
-				}, nil
-			}
-
-			a.sendThought(fmt.Sprintf("Calling tool: %s", plan.Tool))
-			execution, toolErr := a.executeTool(ctx, state, plan)
-			if toolErr != nil {
-				isRateLimited := strings.Contains(toolErr.Error(), "rate limited") ||
-					strings.Contains(toolErr.Error(), "429")
-				if isRateLimited {
-					a.sendThought("⏸️ Rate limited")
-					a.logger.Warn("agent.rate_limited", "tool", plan.Tool)
-					state.ToolHistory = append(state.ToolHistory, ToolExecution{
-						Tool:      plan.Tool,
-						Error:     "RATE_LIMITED",
-						Success:   false,
-						Timestamp: time.Now(),
-					})
-					resultMsg := a.formatToolResults(state.ToolHistory)
-					msg := "Rate limited by the data service."
-					if resultMsg != "" {
-						msg += " Here's what I found:\n\n" + resultMsg
-					}
-					return &AgentResponse{
-						Final:       true,
-						Message:     msg,
-						ToolCalls:   state.ToolHistory,
-						Thought:     "Rate limited",
-						TotalTokens: state.TotalTokens,
-					}, nil
-				}
-				execution = &ToolExecution{
-					Tool:       plan.Tool,
-					Parameters: plan.Parameters,
-					Error:      toolErr.Error(),
-					Success:    false,
-					Timestamp:  time.Now(),
-				}
-				a.logger.Error("agent.tool_error", "tool", plan.Tool, "error", toolErr.Error())
-				a.sendThought(fmt.Sprintf("❌ Tool failed: %s", toolErr.Error()))
-			} else {
-				execution.ResultSummary = summariseResult(plan.Tool, execution.Result)
-				a.logger.Info("agent.tool_ok", "tool", plan.Tool)
-				a.sendThought(fmt.Sprintf("✅ Tool executed successfully: %s", plan.Tool))
-			}
-			state.ToolHistory = append(state.ToolHistory, *execution)
-		}
-	}
-
-	resultMsg := a.formatToolResults(state.ToolHistory)
-	a.logger.Info("agent.done",
-		"steps", state.CurrentStep,
-		"total_tokens", state.TotalTokens,
-		"query", query,
-	)
-	if resultMsg != "" {
-		return &AgentResponse{
-			Final:       true,
-			Message:     resultMsg,
-			ToolCalls:   state.ToolHistory,
-			Thought:     "Task completed",
-			TotalTokens: state.TotalTokens,
-		}, nil
-	}
-	return &AgentResponse{
-		Final:       true,
-		Error:       fmt.Sprintf("Max steps (%d) reached", state.MaxSteps),
-		Thought:     "Task incomplete",
-		ToolCalls:   state.ToolHistory,
-		TotalTokens: state.TotalTokens,
-	}, nil
-}
-
-func lastSuccessfulSummary(history []ToolExecution) interface{} {
-	for i := len(history) - 1; i >= 0; i-- {
-		if history[i].Success && history[i].ResultSummary != "" {
-			return history[i].ResultSummary
-		}
-	}
-	return lastSuccessfulResult(history)
-}
-
-func lastSuccessfulResult(history []ToolExecution) interface{} {
-	for i := len(history) - 1; i >= 0; i-- {
-		if history[i].Success && history[i].Result != nil {
-			return history[i].Result
-		}
-	}
-	return nil
-}
-
-func (a *Agent) sendThought(thought string) {
-	if a.ThoughtChain != nil {
-		select {
-		case a.ThoughtChain <- thought:
-		default:
-		}
-	}
-}
-
-func (a *Agent) formatToolResults(history []ToolExecution) string {
-	var result strings.Builder
-	for _, exec := range history {
-		if exec.Success && exec.Result != nil {
-			switch v := exec.Result.(type) {
-			case map[string]interface{}:
-				if data, ok := v["data"].([]interface{}); ok {
-					for _, item := range data {
-						if product, ok := item.(map[string]interface{}); ok {
-							name, _ := product["name"].(string)
-							price, _ := product["price"].(float64)
-							if name != "" {
-								result.WriteString(fmt.Sprintf("• %s: $%.2f\n", name, price))
-							}
-						}
-					}
-					return result.String()
-				}
-				if name, ok := v["name"].(string); ok {
-					price, _ := v["price"].(float64)
-					result.WriteString(fmt.Sprintf("• %s: $%.2f\n", name, price))
-					return result.String()
-				}
-			}
-		}
-	}
-	return result.String()
-}
-
-func (a *Agent) think(ctx context.Context, state *AgentState) (*llm.AgentPlan, int, error) {
-	if len(state.ToolHistory) > 0 {
-		last := state.ToolHistory[len(state.ToolHistory)-1]
-		if strings.Contains(last.Error, "RATE_LIMITED") {
-			return &llm.AgentPlan{
-				Thought: "Rate limited. Providing best answer from available data.",
-				Action:  "final_answer",
-			}, 0, nil
-		}
-	}
-	if len(state.ToolHistory) >= 3 {
-		lastThree := state.ToolHistory[len(state.ToolHistory)-3:]
-		allSameFailed := true
-		for _, exec := range lastThree {
-			if exec.Tool != lastThree[0].Tool || exec.Success {
-				allSameFailed = false
-				break
-			}
-		}
-		if allSameFailed {
-			return &llm.AgentPlan{
-				Thought: "Same tool failed 3 times. Returning best available answer.",
-				Action:  "final_answer",
-			}, 0, nil
-		}
-	}
-
-	prompt := a.buildPrompt(state)
-	var lastErr error
-
-	for attempt := 0; attempt < 3; attempt++ {
-		response, tokens, err := a.LLM.GetAgentPlanWithUsage(ctx, prompt, state.Tools)
-		if err != nil {
-			lastErr = err
-			prompt = fmt.Sprintf("ERROR: %v. Respond with ONLY valid JSON.\n\n%s", err, prompt)
-			continue
-		}
-
-		if response.Action == "tool_call" {
-			if response.Tool == "" {
-				prompt = "ERROR: tool_call requires a non-empty tool name.\n\n" + prompt
 				continue
 			}
-			resolved, resolveErr := a.resolveToolName(response.Tool, state.Tools)
-			if resolveErr != nil {
-				if attempt < 2 {
-					prompt = fmt.Sprintf("ERROR: Tool %q not found. Available: %v\n\n%s",
-						response.Tool, a.getToolNames(state.Tools), prompt)
-					continue
+			for _, k := range []string{"name", "title", "label"} {
+				if n, ok := im[k].(string); ok {
+					nameOnly = append(nameOnly, map[string]string{"name": n})
+					break
 				}
-				return nil, tokens, resolveErr
-			}
-			response.Tool = resolved
-		} else if response.Action != "final_answer" {
-			prompt = fmt.Sprintf("ERROR: action must be tool_call or final_answer, got %q\n\n%s",
-				response.Action, prompt)
-			continue
-		}
-
-		return response, tokens, nil
-	}
-	return nil, 0, fmt.Errorf("think failed after 3 attempts: %w", lastErr)
-}
-
-func (a *Agent) resolveToolName(name string, tools []llm.Tool) (string, error) {
-	for _, t := range tools {
-		if t.Name == name {
-			return name, nil
-		}
-	}
-	if similar := a.findSimilarTool(name, tools); similar != "" {
-		return similar, nil
-	}
-	return "", fmt.Errorf("tool %q not found; available: %v", name, a.getToolNames(tools))
-}
-
-func (a *Agent) findSimilarTool(name string, tools []llm.Tool) string {
-	lower := strings.ToLower(name)
-	var best string
-	var bestScore int
-	for _, t := range tools {
-		tl := strings.ToLower(t.Name)
-		if strings.Contains(tl, lower) || strings.Contains(lower, tl) {
-			return t.Name
-		}
-		score := 0
-		for _, ch := range lower {
-			if strings.ContainsRune(tl, ch) {
-				score++
 			}
 		}
-		for _, kw := range []string{"product", "category", "list", "get", "search"} {
-			if strings.Contains(tl, kw) && strings.Contains(lower, kw) {
-				score += 4
-			}
+		total := len(slice)
+		if t, ok := m["total"].(float64); ok && int(t) > total {
+			total = int(t)
 		}
-		if score > bestScore {
-			bestScore = score
-			best = t.Name
-		}
+		out := map[string]interface{}{key: nameOnly, "total": total}
+		b, _ := json.Marshal(out)
+		return string(b)
 	}
-	if bestScore > 3 {
-		return best
+	// Flat object with no list key — marshal compactly.
+	b, _ := json.Marshal(m)
+	if len(b) <= 300 {
+		return string(b)
 	}
-	return ""
-}
-
-func (a *Agent) getToolNames(tools []llm.Tool) []string {
-	names := make([]string, len(tools))
-	for i, t := range tools {
-		names[i] = t.Name
-	}
-	return names
-}
-
-func (a *Agent) executeTool(ctx context.Context, state *AgentState, plan *llm.AgentPlan) (*ToolExecution, error) {
-	if state.Endpoint == "" {
-		return nil, fmt.Errorf("no MCP endpoint configured")
-	}
-	client := a.Pool.Get(state.Endpoint)
-	if client == nil {
-		return nil, fmt.Errorf("MCP client not found for endpoint: %s", state.Endpoint)
-	}
-	if plan.Parameters == nil {
-		plan.Parameters = make(map[string]interface{})
-	}
-	result, err := client.CallTool(ctx, plan.Tool, plan.Parameters)
-	if err != nil {
-		return &ToolExecution{
-			Tool:       plan.Tool,
-			Parameters: plan.Parameters,
-			Error:      err.Error(),
-			Success:    false,
-			Timestamp:  time.Now(),
-		}, err
-	}
-	return &ToolExecution{
-		Tool:       plan.Tool,
-		Parameters: plan.Parameters,
-		Result:     result,
-		Success:    true,
-		Timestamp:  time.Now(),
-	}, nil
-}
-
-func (a *Agent) buildPrompt(state *AgentState) string {
-	var sb strings.Builder
-
-	sb.WriteString("You are a precise AI agent. Answer the user's query using the available tools.\n\n")
-	sb.WriteString("## Query:\n")
-	sb.WriteString(fmt.Sprintf("%q\n\n", state.Query))
-
-	if len(state.ToolHistory) > 0 {
-		sb.WriteString("## Tool Results So Far:\n")
-		for i, exec := range state.ToolHistory {
-			sb.WriteString(fmt.Sprintf("\nStep %d — %s\n", i+1, exec.Tool))
-			if exec.Success {
-				summary := exec.ResultSummary
-				if summary == "" {
-					summary = summariseResult(exec.Tool, exec.Result)
-				}
-				sb.WriteString(fmt.Sprintf("Result (summary): %s\n", summary))
-			} else {
-				sb.WriteString(fmt.Sprintf("Error: %s\n", exec.Error))
-			}
-		}
-		sb.WriteString("\nIf these results already answer the query, respond with action=\"final_answer\".\n")
-	}
-
-	sb.WriteString(fmt.Sprintf("\n## Step %d of %d\n", state.CurrentStep, state.MaxSteps))
-	sb.WriteString("\n## Available Tools:\n")
-	for _, tool := range state.Tools {
-		sb.WriteString(fmt.Sprintf("\n- %s: %s\n", tool.Name, tool.Description))
-		sb.WriteString(a.formatParametersWithTypes(tool))
-	}
-
-	sb.WriteString(`
-## Parameter Types:
-- integer → number:  {"page": 1}
-- string  → quoted:  {"category": "Electronics"}
-- boolean → bare:    {"active": true}
-
-## Response (JSON only):
-{"thought":"...","action":"tool_call"|"final_answer","tool":"...","parameters":{...},"next_steps":[]}
-`)
-	return sb.String()
-}
-
-func (a *Agent) formatParametersWithTypes(tool llm.Tool) string {
-	var sb strings.Builder
-	if params, ok := tool.Parameters["properties"].(map[string]interface{}); ok {
-		sb.WriteString("  Parameters:\n")
-		for name, info := range params {
-			if m, ok := info.(map[string]interface{}); ok {
-				sb.WriteString(fmt.Sprintf("    - %s (%v): %v\n", name, m["type"], m["description"]))
-			}
-		}
-	}
-	return sb.String()
-}
-
-func (a *Agent) buildPromptWithWarning(state *AgentState, warning string) string {
-	return warning + "\n\n" + a.buildPrompt(state)
+	return string(b[:300]) + "…"
 }

@@ -132,10 +132,6 @@ type ToolSchema struct {
 	Params map[string]string
 }
 
-// ---------------------------------------------------------------------------
-// Wire types
-// ---------------------------------------------------------------------------
-
 type chatMessage struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
@@ -172,10 +168,6 @@ type tokenUsage struct {
 	TotalTokens      int `json:"total_tokens"`
 }
 
-// ---------------------------------------------------------------------------
-// Request building
-// ---------------------------------------------------------------------------
-
 func (c *Client) buildRequest(msgs []chatMessage, maxTokens int, temp float64, stream bool) chatRequest {
 	req := chatRequest{
 		Model:       c.Model,
@@ -197,6 +189,20 @@ func (c *Client) buildRequest(msgs []chatMessage, maxTokens int, temp float64, s
 	return req
 }
 
+// buildRequestText builds a plain-text (non-JSON-mode) chat request.
+// Use this for the formatter and any other call that should return prose,
+// not a JSON object — otherwise Fireworks/llama.cpp force JSON output.
+func (c *Client) buildRequestText(msgs []chatMessage, maxTokens int, temp float64) chatRequest {
+	return chatRequest{
+		Model:       c.Model,
+		Messages:    msgs,
+		MaxTokens:   maxTokens,
+		Temperature: temp,
+		Stream:      false,
+		// Deliberately no ResponseFmt / Format — free-text prose response.
+	}
+}
+
 func (c *Client) completionURL() string {
 	switch c.Provider {
 	case ProviderOllama:
@@ -207,10 +213,6 @@ func (c *Client) completionURL() string {
 		return c.BaseURL + "/chat/completions"
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Core HTTP transport
-// ---------------------------------------------------------------------------
 
 func (c *Client) doRequest(ctx context.Context, req chatRequest) ([]byte, int, error) {
 	buf, err := json.Marshal(req)
@@ -473,60 +475,54 @@ Respond with ONLY valid JSON:
 	return choice, nil
 }
 
-const formatSystemPrompt = "You are a helpful, friendly assistant. Answer conversationally and concisely."
+// formatSystemPrompt is kept to one line — it's included on every format call.
+const formatSystemPrompt = `Answer the user's question using only the provided data. Be concise and natural. No filler like "Based on the data".`
 
 func (c *Client) FormatResponse(ctx context.Context, query string, mcpResult interface{}, streamCallback func(string)) (string, error) {
-	resultJSON, err := json.Marshal(mcpResult)
+	userPrompt, err := c.buildFormatPrompt(query, mcpResult)
 	if err != nil {
-		return "", fmt.Errorf("marshal mcp result: %w", err)
+		return "", err
 	}
-
-	userPrompt := c.buildFormatPrompt(query, string(resultJSON))
-	req := c.buildRequest(
-		[]chatMessage{
-			{Role: "system", Content: formatSystemPrompt},
-			{Role: "user", Content: userPrompt},
-		},
-		350, 0.5, streamCallback != nil,
-	)
-
+	msgs := []chatMessage{
+		{Role: "system", Content: formatSystemPrompt},
+		{Role: "user", Content: userPrompt},
+	}
 	if streamCallback != nil {
+		// Streaming: buildRequest handles stream=true (no JSON mode either way).
+		req := c.buildRequest(msgs, 400, 0.4, true)
 		return c.doStream(ctx, req, streamCallback)
 	}
+	// Non-streaming: use buildRequestText so the model returns prose, not JSON.
+	req := c.buildRequestText(msgs, 400, 0.4)
 	return c.chat(ctx, req)
 }
 
 func (c *Client) FormatResponseWithUsage(ctx context.Context, query string, mcpResult interface{}) (string, int, error) {
-	resultJSON, err := json.Marshal(mcpResult)
+	userPrompt, err := c.buildFormatPrompt(query, mcpResult)
 	if err != nil {
-		return "", 0, fmt.Errorf("marshal mcp result: %w", err)
+		return "", 0, err
 	}
-
-	userPrompt := c.buildFormatPrompt(query, string(resultJSON))
-	req := c.buildRequest(
+	// buildRequestText: no response_format constraint → plain prose output.
+	req := c.buildRequestText(
 		[]chatMessage{
 			{Role: "system", Content: formatSystemPrompt},
 			{Role: "user", Content: userPrompt},
 		},
-		350, 0.5, false,
+		400, 0.4,
 	)
-
 	return c.chatWithUsage(ctx, req)
 }
 
-func (c *Client) buildFormatPrompt(query, resultJSON string) string {
-	return fmt.Sprintf(`The user asked: %q
-
-Here is the data retrieved:
-%s
-
-Write a natural, conversational reply — as if you're a knowledgeable friend answering them directly.
-Rules:
-- Lead with the most relevant detail for their question
-- Use plain language, no bullet points unless there are 3+ items
-- Include price, rating, or key specs only when they add value
-- Keep it concise — 1 to 4 sentences for simple queries, a short list for multi-item results
-- Never say "Based on the data" or "The API returned" — just answer`, query, resultJSON)
+// buildFormatPrompt produces the smallest prompt that still gives a good answer.
+// Data is already slimmed (name/price/rating/description≤120chars) by buildDisplayData.
+func (c *Client) buildFormatPrompt(query string, mcpResult interface{}) (string, error) {
+	resultJSON, err := json.Marshal(mcpResult)
+	if err != nil {
+		return "", fmt.Errorf("marshal result: %w", err)
+	}
+	return fmt.Sprintf(`Q: %s
+Data: %s
+Reply in 1-4 sentences or a short list. No headers.`, query, string(resultJSON)), nil
 }
 
 func (c *Client) resolveToolName(name string, tools []Tool) (string, error) {
